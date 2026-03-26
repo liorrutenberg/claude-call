@@ -66,7 +66,10 @@ function followRedirects(url: string, maxRedirects = 5): Promise<IncomingMessage
     const getter = url.startsWith('https') ? httpsGet : httpGet
     getter(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        followRedirects(res.headers.location, maxRedirects - 1).then(resolve, reject)
+        const location = res.headers.location.startsWith('/')
+          ? new URL(res.headers.location, url).href
+          : res.headers.location
+        followRedirects(location, maxRedirects - 1).then(resolve, reject)
         return
       }
       if (res.statusCode && res.statusCode >= 400) {
@@ -144,7 +147,10 @@ export async function downloadWithProgress(model: ModelInfo): Promise<string> {
   }
 
   process.stderr.write(`  ${model.name} (${model.sizeHint})\n`)
-  const path = await downloadModel(model, (pct) => printProgress(model.name, pct))
+  let lastPct = -1
+  const path = await downloadModel(model, (pct) => {
+    if (pct !== lastPct) { lastPct = pct; printProgress(model.name, pct) }
+  })
   return path
 }
 
