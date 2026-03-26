@@ -15,8 +15,9 @@ dataDir: ~/.claude-call
 
 tts:
   # TTS engine selection
-  # auto: tries Piper → edge-tts → say (first available wins)
+  # auto: tries Piper → Qwen3 → edge-tts → say (first available wins)
   # piper: Piper only (fails if unavailable)
+  # qwen3: Qwen3-TTS only (requires running server)
   # edge-tts: edge-tts only
   # say: macOS say only
   # Default: auto
@@ -37,6 +38,13 @@ tts:
   # Default: ~/.claude-call/models/en_US-lessac-medium.onnx
   # Env: CLAUDE_CALL_PIPER_MODEL
   piperModel: ~/.claude-call/models/en_US-lessac-medium.onnx
+
+  # Qwen3-TTS server URL (opt-in)
+  # Requires a separately installed and running Qwen3-TTS GPU daemon.
+  # When the server isn't reachable, this tier is silently skipped.
+  # Default: http://127.0.0.1:8880
+  # Env: CLAUDE_CALL_TTS_QWEN3_URL
+  qwen3Url: http://127.0.0.1:8880
 
 stt:
   # Whisper server URL (HTTP API)
@@ -114,7 +122,8 @@ Server mode reduces transcription latency from ~1100ms (CLI, model load each tim
 In `auto` mode, claude-call tries engines in order:
 
 1. **Piper** — Local ONNX model, ~100ms latency, offline. Needs `piper` binary + model.
-2. **edge-tts** — Microsoft neural voices, free, high quality. Needs `edge-tts` CLI + internet.
-3. **say** — macOS built-in. Always available, robotic but reliable.
+2. **Qwen3-TTS** — Best quality, fully local GPU inference. Opt-in: requires a separately running daemon (not installed by setup). Silently skipped when server isn't reachable.
+3. **edge-tts** — Microsoft neural voices, free, high quality. Needs `edge-tts` CLI + internet.
+4. **say** — macOS built-in. Always available, robotic but reliable.
 
 Set `engine` to a specific value to skip the cascade and use only that engine.
