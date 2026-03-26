@@ -77,7 +77,7 @@ function isMeaningful(text: string): boolean {
 
 // ─── Soft pause ─────────────────────────────────────────────
 
-const PAUSE_PHRASES = ['call pause', 'cold pause', 'called pause']
+const PAUSE_PHRASES = ['call pause', 'cold pause', 'called pause', 'kolpaz', 'kol paz']
 const UNPAUSE_PHRASES = ['unpause', 'call unpause', 'call start', 'call resume', 'resume']
 
 function matchesPause(text: string): boolean {
