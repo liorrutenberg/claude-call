@@ -34,6 +34,7 @@ import {
   startKeywordMonitor,
 } from './voice/recorder.js'
 import type { RecordOptions } from './voice/recorder.js'
+import { applySttCorrections } from './voice/pronunciation.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -267,7 +268,7 @@ async function voiceLoop(): Promise<void> {
       let text: string
       try {
         const t2 = Date.now()
-        text = normalizeText(await transcribe(wavPath))
+        text = applySttCorrections(normalizeText(await transcribe(wavPath)))
         const t3 = Date.now()
         log(`transcription took ${t3 - t2}ms: "${text}"`)
       } catch (err) {

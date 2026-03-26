@@ -47,25 +47,28 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 ### Prerequisites
 
 - **Node.js 18+**
-- **sox** — audio recording (`brew install sox`)
-- **whisper-cli** — speech-to-text (`brew install whisper-cpp`)
-- **Optional:** piper (fast local TTS), edge-tts (neural TTS)
+- **Homebrew** (macOS)
 
 ### Install and Setup
+
+Run from your project directory:
 
 ```bash
 npm install -g claude-call
 claude-call setup
 ```
 
-The setup wizard will:
-1. Check system dependencies (sox, whisper-cli, piper, edge-tts)
-2. Download models (Silero VAD, Whisper large-v3-turbo, Piper voice)
-3. Write config to `~/.claude-call/config.yaml`
-4. Add voice server to your project's `.mcp.json`
-5. Create `/call-start` and `/call-stop` slash commands in `.claude/commands/`
+Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
 
-Then start Claude Code and say `/call-start`.
+Then launch Claude Code with voice enabled:
+
+```bash
+claude --dangerously-load-development-channels server:voice
+```
+
+Say `/call-start` and start talking.
+
+> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the MCP config and slash commands to whichever project you run it from.
 
 ## Configuration
 

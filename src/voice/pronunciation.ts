@@ -41,8 +41,10 @@ function escapeRegex(str: string): string {
  * Supports both flat and categorized formats:
  *   flat:       { TypeScript: "Type Script" }
  *   categorized: { tech: { TypeScript: "Type Script" }, acronyms: { SQL: "S Q L" } }
+ *
+ * @param excludeCategories - Category names to skip (e.g., 'corrections')
  */
-function flattenDict(parsed: unknown): Record<string, string> {
+function flattenDict(parsed: unknown, excludeCategories?: Set<string>): Record<string, string> {
   const result: Record<string, string> = {}
   if (!parsed || typeof parsed !== 'object') return result
 
@@ -50,11 +52,33 @@ function flattenDict(parsed: unknown): Record<string, string> {
     if (typeof value === 'string') {
       result[key] = value
     } else if (typeof value === 'object' && value !== null) {
+      if (excludeCategories?.has(key)) continue
       for (const [innerKey, innerValue] of Object.entries(value as Record<string, unknown>)) {
         if (typeof innerValue === 'string') {
           result[innerKey] = innerValue
         }
       }
+    }
+  }
+
+  return result
+}
+
+/**
+ * Extract only the 'corrections' category from the parsed YAML.
+ * Used for STT post-processing (fixing common Whisper mishearings).
+ */
+function extractCorrections(parsed: unknown): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (!parsed || typeof parsed !== 'object') return result
+
+  const obj = parsed as Record<string, unknown>
+  const corrections = obj.corrections
+  if (!corrections || typeof corrections !== 'object') return result
+
+  for (const [key, value] of Object.entries(corrections as Record<string, unknown>)) {
+    if (typeof value === 'string') {
+      result[key] = value
     }
   }
 
@@ -90,7 +114,7 @@ function loadEntries(): PronunciationEntry[] {
 
     const raw = readFileSync(path, 'utf-8')
     const parsed = parseYaml(raw)
-    const dict = flattenDict(parsed)
+    const dict = flattenDict(parsed, new Set(['corrections']))
     cachedEntries = buildEntries(dict)
     cachedMtime = mtime
     cachedPath = path
@@ -133,4 +157,27 @@ export function applyPronunciation(text: string): string {
     result = result.replace(pattern, replacement)
   }
   return result
+}
+
+/**
+ * Apply STT corrections to transcribed text — fix common Whisper mishearings.
+ * Uses the 'corrections' category from the pronunciation YAML.
+ */
+export function applySttCorrections(text: string): string {
+  const path = getDictPath()
+  if (!existsSync(path)) return text
+
+  try {
+    const raw = readFileSync(path, 'utf-8')
+    const parsed = parseYaml(raw)
+    const corrections = extractCorrections(parsed)
+
+    let result = text
+    for (const [wrong, right] of Object.entries(corrections)) {
+      result = result.replace(new RegExp(`\\b${escapeRegex(wrong)}\\b`, 'gi'), right)
+    }
+    return result
+  } catch {
+    return text
+  }
 }
