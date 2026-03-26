@@ -13,7 +13,7 @@ import { join, dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stringify as stringifyYaml } from 'yaml'
 import { loadConfig } from './config.js'
-import { checkDeps, formatDepsReport } from './setup/deps.js'
+import { checkDeps, formatDepsReport, installMissing } from './setup/deps.js'
 import { MODELS, downloadWithProgress, isModelDownloaded } from './setup/models.js'
 
 const VERSION = '0.1.0'
@@ -130,17 +130,25 @@ async function setup(): Promise<void> {
   writeln('Continuous two-way voice conversations for Claude Code')
   writeln()
 
-  // Step 1: Check system dependencies
+  // Step 1: Check and install dependencies
   writeln('\x1b[1m1. Checking dependencies...\x1b[0m')
   writeln()
   const deps = checkDeps()
   writeln(formatDepsReport(deps))
   writeln()
 
-  const missingRequired = deps.filter(d => d.required && !d.found)
-  if (missingRequired.length > 0) {
-    writeln('\x1b[31mMissing required dependencies. Install them and re-run setup.\x1b[0m')
-    process.exit(1)
+  const missing = deps.filter(d => !d.found)
+  if (missing.length > 0) {
+    writeln('  Installing missing dependencies...')
+    writeln()
+    const failed = installMissing(deps)
+    if (failed.length > 0) {
+      writeln()
+      writeln('\x1b[31mFailed to install: ' + failed.map(d => d.name).join(', ') + '\x1b[0m')
+      writeln('Install manually and re-run setup.')
+      process.exit(1)
+    }
+    writeln()
   }
 
   // Step 2: Download models (VAD + whisper-large-v3-turbo + Piper voice)
@@ -208,7 +216,13 @@ async function setup(): Promise<void> {
   // Step 5: Done
   writeln('\x1b[1m5. Setup complete!\x1b[0m')
   writeln()
-  writeln('  Done. Start Claude Code and say \x1b[1m/call-start\x1b[0m')
+  writeln('  Launch Claude Code with voice:')
+  writeln()
+  writeln('    \x1b[1mclaude --dangerously-load-development-channels server:voice\x1b[0m')
+  writeln()
+  writeln('  Then say \x1b[1m/call-start\x1b[0m to begin talking.')
+  writeln()
+  writeln('  \x1b[2mTo add voice to another project, run "claude-call setup" from that directory.\x1b[0m')
   writeln()
 }
 
