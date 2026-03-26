@@ -155,8 +155,11 @@ async function transcribeViaServer(wavPath: string, fast: boolean): Promise<stri
   if (!fast) {
     formData.append('beam_size', '5')
     formData.append('best_of', '5')
-    formData.append('prompt', getWhisperPrompt())
+  } else {
+    formData.append('beam_size', '2')
+    formData.append('best_of', '2')
   }
+  formData.append('prompt', getWhisperPrompt())
 
   const timeout_ms = fast ? 8_000 : 15_000
   const controller = new AbortController()
@@ -191,8 +194,11 @@ function transcribeViaCLI(wavPath: string, fast: boolean): Promise<string> {
   const args = ['-m', model, '-f', wavPath, '--no-timestamps', '-l', 'en']
 
   if (!fast) {
-    args.push('--beam-size', '5', '--best-of', '5', '--prompt', getWhisperPrompt())
+    args.push('--beam-size', '5', '--best-of', '5')
+  } else {
+    args.push('--beam-size', '2', '--best-of', '2')
   }
+  args.push('--prompt', getWhisperPrompt())
 
   return new Promise((resolve, reject) => {
     execFile(
