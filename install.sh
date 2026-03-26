@@ -44,7 +44,7 @@ info "Installing dependencies..."
 npm install --silent 2>/dev/null
 
 info "Building..."
-npx tsc --quiet 2>/dev/null || npx tsc
+npx tsc
 
 # ─── Symlink binary ─────────────────────────────────────────
 
