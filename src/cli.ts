@@ -8,8 +8,8 @@
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stringify as stringifyYaml } from 'yaml'
 import { loadConfig } from './config.js'
@@ -42,6 +42,86 @@ async function confirm(prompt: string, defaultYes = true): Promise<boolean> {
   return answer.toLowerCase().startsWith('y')
 }
 
+/**
+ * Detect the project root by walking up from cwd looking for .git or package.json.
+ * Returns null if no project root is found.
+ */
+function findProjectRoot(): string | null {
+  let dir = process.cwd()
+  const root = '/'
+  while (dir !== root) {
+    if (existsSync(join(dir, '.git')) || existsSync(join(dir, 'package.json'))) {
+      return dir
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/**
+ * Add voice server entry to a project's .mcp.json.
+ * Creates the file if it doesn't exist, merges if it does.
+ */
+function writeProjectMcpJson(projectRoot: string): void {
+  const mcpPath = join(projectRoot, '.mcp.json')
+  let existing: Record<string, unknown> = {}
+
+  if (existsSync(mcpPath)) {
+    try {
+      existing = JSON.parse(readFileSync(mcpPath, 'utf-8')) as Record<string, unknown>
+    } catch {
+      existing = {}
+    }
+  }
+
+  const servers = (existing.mcpServers ?? {}) as Record<string, unknown>
+  servers.voice = {
+    command: 'npx',
+    args: ['claude-call', 'serve'],
+  }
+  existing.mcpServers = servers
+
+  writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + '\n')
+  writeln(`  Voice server added to ${mcpPath}`)
+}
+
+/**
+ * Create .claude/commands/call-start.md and call-stop.md in the project.
+ */
+function writeCommandFiles(projectRoot: string): void {
+  const commandsDir = join(projectRoot, '.claude', 'commands')
+  mkdirSync(commandsDir, { recursive: true })
+
+  const callStart = `Resume the voice channel by removing the pause file, then confirm voice is active.
+
+\`\`\`bash
+rm -f /tmp/claude-call-pause
+\`\`\`
+
+Say "Call mode. I'm here — what's on your mind?" using the speak tool.
+`
+
+  const callStop = `Pause the voice channel by creating the pause file, then confirm voice is paused.
+
+\`\`\`bash
+touch /tmp/claude-call-pause
+\`\`\`
+
+Respond with "Voice paused." (text only, don't use speak tool since we just muted).
+`
+
+  const startPath = join(commandsDir, 'call-start.md')
+  const stopPath = join(commandsDir, 'call-stop.md')
+
+  writeFileSync(startPath, callStart)
+  writeln(`  Created ${startPath}`)
+
+  writeFileSync(stopPath, callStop)
+  writeln(`  Created ${stopPath}`)
+}
+
 // ─── Setup command ──────────────────────────────────────────
 
 async function setup(): Promise<void> {
@@ -51,7 +131,7 @@ async function setup(): Promise<void> {
   writeln()
 
   // Step 1: Check system dependencies
-  writeln('\x1b[1m1. Checking system dependencies...\x1b[0m')
+  writeln('\x1b[1m1. Checking dependencies...\x1b[0m')
   writeln()
   const deps = checkDeps()
   writeln(formatDepsReport(deps))
@@ -63,43 +143,31 @@ async function setup(): Promise<void> {
     process.exit(1)
   }
 
-  const hasWhisper = deps.find(d => d.name === 'whisper-cli')?.found ?? false
-
-  // Step 2: Download models
+  // Step 2: Download models (VAD + whisper-large-v3-turbo + Piper voice)
   writeln('\x1b[1m2. Downloading models...\x1b[0m')
   writeln()
 
-  // VAD model — always required
   await downloadWithProgress(MODELS.vad)
 
-  // Whisper model selection
-  let whisperSize = 'base'
-  if (hasWhisper || await confirm('Download a Whisper STT model for speech-to-text?')) {
-    writeln()
-    writeln('  Whisper model sizes:')
-    writeln('    1. base    (~141 MB) — fast, good enough for most use')
-    writeln('    2. large   (~1.5 GB) — best accuracy, needs more RAM')
-    writeln()
-    const choice = await ask('  Choose model size', '1')
-    whisperSize = choice === '2' ? 'large' : 'base'
-    const modelKey = whisperSize === 'large' ? 'whisper-large' : 'whisper-base'
-    writeln()
-    await downloadWithProgress(MODELS[modelKey])
-  }
+  // Whisper model — default to large-v3-turbo for accuracy
+  writeln()
+  writeln('  Whisper model sizes:')
+  writeln('    1. large   (~1.5 GB) — best accuracy (recommended)')
+  writeln('    2. base    (~141 MB) — faster, lower accuracy')
+  writeln()
+  const whisperChoice = await ask('  Choose model size', '1')
+  const whisperSize = whisperChoice === '2' ? 'base' : 'large'
+  const whisperModelKey = whisperSize === 'large' ? 'whisper-large' : 'whisper-base'
+  writeln()
+  await downloadWithProgress(MODELS[whisperModelKey])
+
+  // Piper voice model
+  writeln()
+  await downloadWithProgress(MODELS['piper-voice'])
+  await downloadWithProgress(MODELS['piper-voice-config'])
   writeln()
 
-  // Piper model — optional
-  const hasPiper = deps.find(d => d.name === 'piper')?.found ?? false
-  if (hasPiper && !isModelDownloaded('piper-voice')) {
-    if (await confirm('Download Piper voice model for fast local TTS?')) {
-      writeln()
-      await downloadWithProgress(MODELS['piper-voice'])
-      await downloadWithProgress(MODELS['piper-voice-config'])
-    }
-    writeln()
-  }
-
-  // Step 3: Write config
+  // Step 3: Write global config
   writeln('\x1b[1m3. Writing configuration...\x1b[0m')
   writeln()
 
@@ -117,31 +185,33 @@ async function setup(): Promise<void> {
   } else {
     writeConfigFile(configPath, whisperSize)
   }
-
-  // Step 4: Write MCP config
-  const mcpPath = join(configDir, 'mcp.json')
-  writeMcpConfig(mcpPath)
   writeln()
 
-  // Step 5: Next steps
-  writeln('\x1b[1m4. Setup complete!\x1b[0m')
+  // Step 4: Add to project .mcp.json + create command files
+  writeln('\x1b[1m4. Project integration...\x1b[0m')
   writeln()
-  writeln('  To use with Claude Code, add to your project \x1b[1m.mcp.json\x1b[0m:')
+
+  const projectRoot = findProjectRoot()
+  if (projectRoot) {
+    writeln(`  Detected project: ${projectRoot}`)
+    writeProjectMcpJson(projectRoot)
+    writeCommandFiles(projectRoot)
+  } else {
+    writeln('  No project root detected (no .git or package.json found).')
+    if (await confirm('  Add to current directory?', false)) {
+      const cwd = process.cwd()
+      writeProjectMcpJson(cwd)
+      writeCommandFiles(cwd)
+    } else {
+      writeln('  Skipping project integration. You can manually add to .mcp.json later.')
+    }
+  }
   writeln()
-  writeln('  {')
-  writeln('    "mcpServers": {')
-  writeln('      "voice": {')
-  writeln('        "command": "npx",')
-  writeln('        "args": ["claude-call", "serve"]')
-  writeln('      }')
-  writeln('    }')
-  writeln('  }')
+
+  // Step 5: Done
+  writeln('\x1b[1m5. Setup complete!\x1b[0m')
   writeln()
-  writeln('  Or launch directly:')
-  writeln(`    claude --mcp-config ${mcpPath}`)
-  writeln()
-  writeln('  Then enable the development channel:')
-  writeln('    claude --dangerously-load-development-channels server:voice')
+  writeln('  Done. Start Claude Code and say \x1b[1m/call-start\x1b[0m')
   writeln()
 }
 
@@ -164,20 +234,6 @@ function writeConfigFile(path: string, whisperSize: string): void {
 
   writeFileSync(path, stringifyYaml(config))
   writeln(`  Config written to ${path}`)
-}
-
-function writeMcpConfig(path: string): void {
-  const config = {
-    mcpServers: {
-      voice: {
-        command: 'npx',
-        args: ['claude-call', 'serve'],
-      },
-    },
-  }
-
-  writeFileSync(path, JSON.stringify(config, null, 2) + '\n')
-  writeln(`  MCP config written to ${path}`)
 }
 
 // ─── Check command ──────────────────────────────────────────

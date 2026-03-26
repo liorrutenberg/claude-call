@@ -92,6 +92,9 @@ const mcp = new Server(
       'No markdown, no bullet points, no code blocks in spoken replies.',
       'You can still use tools (Read, Write, Bash, etc.) before replying — just make sure to call speak with the final answer.',
       'If the user also types in the terminal, respond normally in text (don\'t call speak for typed messages).',
+      'CALL MODE: Never make the user wait. If work is needed (lookups, searches, multi-step research), dispatch a background Agent and keep talking.',
+      'Offload heavy work to background agents with run_in_background: true. Answer simple questions directly.',
+      'When a background agent completes, surface the result naturally in conversation.',
     ].join(' '),
   },
 )
