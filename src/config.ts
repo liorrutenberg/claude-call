@@ -15,10 +15,11 @@ import { parse as parseYaml } from 'yaml'
 export type SilenceMode = 'quick' | 'standard' | 'thoughtful'
 
 export interface TtsConfig {
-  engine: 'auto' | 'piper' | 'edge-tts' | 'say'
+  engine: 'auto' | 'piper' | 'qwen3' | 'edge-tts' | 'say'
   voice: string
   rate: number
   piperModel: string
+  qwen3Url: string
 }
 
 export interface SttConfig {
@@ -60,6 +61,7 @@ function defaults(): Config {
       voice: 'en-US-EmmaNeural',
       rate: 1.25,
       piperModel: join(DATA_DIR, 'models', 'en_US-lessac-medium.onnx'),
+      qwen3Url: 'http://127.0.0.1:8880',
     },
     stt: {
       serverUrl: '',
@@ -124,6 +126,9 @@ function applyEnvOverrides(config: Config): void {
 
   const piperModel = env('PIPER_MODEL')
   if (piperModel) config.tts.piperModel = piperModel
+
+  const qwen3Url = env('TTS_QWEN3_URL')
+  if (qwen3Url) config.tts.qwen3Url = qwen3Url
 
   const sttServer = env('WHISPER_SERVER')
   if (sttServer) config.stt.serverUrl = sttServer

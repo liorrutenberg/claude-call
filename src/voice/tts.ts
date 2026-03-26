@@ -1,14 +1,15 @@
 /**
- * Text-to-speech with 3-tier cascade:
+ * Text-to-speech with 4-tier cascade:
  *   1. Piper TTS (local, fast, ~100ms)
- *   2. edge-tts (Microsoft neural voices, free, good quality)
- *   3. macOS say (always works, robotic but reliable)
+ *   2. Qwen3-TTS daemon (localhost:8880, best quality, fully local)
+ *   3. edge-tts (Microsoft neural voices, free, good quality)
+ *   4. macOS say (always works, robotic but reliable)
  *
  * Long text is split into sentences and pipelined: synthesize next chunk
  * while playing current, so the user hears audio faster.
  */
 
-import { existsSync, unlinkSync } from 'node:fs'
+import { existsSync, writeFileSync, unlinkSync } from 'node:fs'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { applyPronunciation } from './pronunciation.js'
 import { loadConfig } from '../config.js'
@@ -49,6 +50,48 @@ function synthesizePiper(text: string, outPath: string): Promise<boolean> {
     proc.once('close', (code) => resolve(code === 0))
     proc.once('error', () => resolve(false))
   })
+}
+
+// ─── Qwen3-TTS daemon ───────────────────────────────────────
+
+async function isQwen3Available(): Promise<boolean> {
+  const config = loadConfig()
+  const url = config.tts.qwen3Url
+  if (!url) return false
+
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 2000)
+    const res = await fetch(`${url}/health`, { signal: controller.signal })
+    clearTimeout(timeout)
+    if (!res.ok) return false
+    const data = (await res.json()) as { status: string; model_loaded: boolean }
+    return data.status === 'ok' && data.model_loaded === true
+  } catch {
+    return false
+  }
+}
+
+async function synthesizeQwen3(text: string): Promise<Buffer | null> {
+  const config = loadConfig()
+  const url = config.tts.qwen3Url
+
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30_000)
+    const res = await fetch(`${url}/synthesize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!res.ok) return null
+    const data = (await res.json()) as { audio_b64: string }
+    return Buffer.from(data.audio_b64, 'base64')
+  } catch {
+    return null
+  }
 }
 
 // ─── edge-tts ───────────────────────────────────────────────
@@ -130,14 +173,27 @@ async function synthesizeToFile(text: string): Promise<string | null> {
     if (engine === 'piper') return null // explicit choice, don't cascade
   }
 
-  // Tier 2: edge-tts
+  // Tier 2: Qwen3-TTS daemon
+  if (engine === 'auto' || engine === 'qwen3') {
+    if (await isQwen3Available()) {
+      const audio = await synthesizeQwen3(text)
+      if (audio) {
+        const tmpFile = `/tmp/claude-call-tts-${process.pid}-${ttsCounter++}.wav`
+        writeFileSync(tmpFile, audio)
+        return tmpFile
+      }
+    }
+    if (engine === 'qwen3') return null
+  }
+
+  // Tier 3: edge-tts
   if (engine === 'auto' || engine === 'edge-tts') {
     const tmpFile = `/tmp/claude-call-tts-${process.pid}-${ttsCounter++}.mp3`
     if (await synthesizeEdgeTts(text, tmpFile) && existsSync(tmpFile)) return tmpFile
     if (engine === 'edge-tts') return null
   }
 
-  // Tier 3: say fallback (handled in speak() — no file needed)
+  // Tier 4: say fallback (handled in speak() — no file needed)
   return null
 }
 
