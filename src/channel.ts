@@ -97,7 +97,7 @@ function matchesUnpause(text: string): boolean {
 async function waitForUnpause(): Promise<void> {
   log('soft paused — listening for unpause keyword...')
 
-  const kwMonitor = await startKeywordMonitor(3, 1.5, 1500)
+  const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
   return new Promise<void>((resolve) => {
     kwMonitor.onBurst = async (wavPath: string) => {
@@ -180,7 +180,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const config = loadConfig()
       const interruptKeywords = config.interrupt.keywords
       let interrupted = false
-      const kwMonitor = await startKeywordMonitor(3, 1.5, 1500)
+      const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
       kwMonitor.onBurst = async (wavPath: string) => {
         try {
