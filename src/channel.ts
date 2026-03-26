@@ -75,9 +75,61 @@ function isMeaningful(text: string): boolean {
   return !JUNK_TRANSCRIPTS.has(t)
 }
 
+// ─── Soft pause ─────────────────────────────────────────────
+
+const PAUSE_PHRASES = ['call pause', 'cold pause', 'called pause']
+const UNPAUSE_PHRASES = ['unpause', 'call unpause', 'call start', 'call resume', 'resume']
+
+function matchesPause(text: string): boolean {
+  const t = text.toLowerCase()
+  return PAUSE_PHRASES.some(p => t.includes(p))
+}
+
+function matchesUnpause(text: string): boolean {
+  const t = text.toLowerCase()
+  return UNPAUSE_PHRASES.some(p => t.includes(p))
+}
+
+/**
+ * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
+ * Resolves when "unpause" / "call unpause" / "resume" is detected.
+ */
+async function waitForUnpause(): Promise<void> {
+  log('soft paused — listening for unpause keyword...')
+
+  const kwMonitor = await startKeywordMonitor(3, 1.5, 1500)
+
+  return new Promise<void>((resolve) => {
+    kwMonitor.onBurst = async (wavPath: string) => {
+      try {
+        const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
+        log(`unpause check: "${raw}"`)
+        if (matchesUnpause(raw)) {
+          softPaused = false
+          log('unpaused by voice command')
+          kwMonitor.stop()
+          resolve()
+        }
+      } catch (err) {
+        log(`unpause transcription error: ${(err as Error).message}`)
+      }
+    }
+
+    // Also exit if hard-paused or externally unpaused
+    const check = setInterval(() => {
+      if (!softPaused || isPaused()) {
+        clearInterval(check)
+        kwMonitor.stop()
+        resolve()
+      }
+    }, 500)
+  })
+}
+
 // ─── State ──────────────────────────────────────────────────
 
 let muted = false
+let softPaused = false
 let voiceLoopRunning = false
 
 // ─── MCP Channel Server ────────────────────────────────────
@@ -220,6 +272,14 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
+      if (softPaused) {
+        await waitForUnpause()
+        if (softPaused) continue // hard pause or other exit
+        log('voice loop resumed from soft pause')
+        await deliver('[Voice resumed]')
+        continue
+      }
+
       let partialText = ''
       let stableText = ''
 
@@ -292,6 +352,16 @@ async function voiceLoop(): Promise<void> {
 
       if (muted) {
         log(`dropped (muted): "${text}"`)
+        continue
+      }
+
+      // Soft pause trigger — "call pause" keeps mic alive but stops processing
+      if (matchesPause(text)) {
+        softPaused = true
+        log(`soft pause triggered: "${text}"`)
+        try {
+          await deliver('[Voice paused — say "call unpause" to resume]')
+        } catch { /* ignore */ }
         continue
       }
 
