@@ -1,0 +1,66 @@
+# Default pronunciation dictionary for claude-call.
+#
+# Serves two purposes:
+#   1. TTS: text is rewritten before synthesis (e.g., "SQL" → "S Q L")
+#   2. STT: keys are used as vocabulary hints for Whisper
+#
+# Categories are organizational only — all entries are flattened.
+# Entries are case-insensitive, whole-word matches.
+#
+# Override with your own file via:
+#   CLAUDE_CALL_PRONUNCIATION_FILE=/path/to/custom.yaml
+#   or pronunciation.file in ~/.claude-call/config.yaml
+
+tech:
+  TypeScript: "Type Script"
+  JavaScript: "Java Script"
+  PostgreSQL: "Postgres Q L"
+  MySQL: "My S Q L"
+  GraphQL: "Graph Q L"
+  Kubernetes: "Koo-ber-net-ees"
+  kubectl: "koob-control"
+  nginx: "engine-X"
+  OAuth: "oh-auth"
+  OAuth2: "oh-auth two"
+
+acronyms:
+  SQL: "S Q L"
+  API: "A P I"
+  APIs: "A P I s"
+  CLI: "C L I"
+  SDK: "S D K"
+  IDE: "I D E"
+  URL: "U R L"
+  URLs: "U R L s"
+  JSON: "Jason"
+  YAML: "Yamel"
+  TOML: "Tom L"
+  AWS: "A W S"
+  GCP: "G C P"
+  SSH: "S S H"
+  TLS: "T L S"
+  DNS: "D N S"
+  CORS: "C O R S"
+  WASM: "Waz-um"
+  MCP: "M C P"
+  LLM: "L L M"
+  LLMs: "L L Ms"
+  RAG: "R A G"
+  GPT: "G P T"
+  STT: "S T T"
+  TTS: "T T S"
+  VAD: "V A D"
+
+tools:
+  npm: "N P M"
+  npx: "N P X"
+  pnpm: "P N P M"
+  tsx: "T S X"
+  jsx: "J S X"
+  ESM: "E S M"
+  CJS: "C J S"
+  ONNX: "on-X"
+  sox: "socks"
+  ffmpeg: "F F mpeg"
+  ffplay: "F F play"
+  afplay: "A F play"
