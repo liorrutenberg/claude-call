@@ -22,6 +22,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { existsSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 
 import { loadConfig, getLogDir } from './config.js'
 import { initVAD } from './voice/vad.js'
@@ -380,6 +381,24 @@ async function voiceLoop(): Promise<void> {
   }
 }
 
+// ─── Cleanup stale processes ────────────────────────────────
+
+function killStaleRecProcesses(): void {
+  try {
+    const myPid = process.pid
+    const out = execSync('pgrep -lf "rec -r"', { timeout: 3000 }).toString()
+    const pids = out.split('\n')
+      .map(line => parseInt(line.trim(), 10))
+      .filter(pid => !isNaN(pid) && pid !== myPid)
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+    }
+    if (pids.length > 0) {
+      log(`killed ${pids.length} stale rec process(es): ${pids.join(', ')}`)
+    }
+  } catch { /* no matching processes */ }
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 let mainStarted = false
@@ -390,6 +409,8 @@ async function main(): Promise<void> {
     return
   }
   mainStarted = true
+
+  killStaleRecProcesses()
 
   await mcp.connect(new StdioServerTransport())
   log('connected to Claude Code')
