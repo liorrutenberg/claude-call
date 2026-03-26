@@ -78,8 +78,8 @@ function writeProjectMcpJson(projectRoot: string): void {
 
   const servers = (existing.mcpServers ?? {}) as Record<string, unknown>
   servers.voice = {
-    command: 'npx',
-    args: ['claude-call', 'serve'],
+    command: 'claude-call',
+    args: ['serve'],
   }
   existing.mcpServers = servers
 
