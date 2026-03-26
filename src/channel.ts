@@ -78,6 +78,7 @@ function isMeaningful(text: string): boolean {
 // ─── State ──────────────────────────────────────────────────
 
 let muted = false
+let voiceLoopRunning = false
 
 // ─── MCP Channel Server ────────────────────────────────────
 
@@ -185,6 +186,12 @@ async function deliver(text: string): Promise<void> {
 // ─── Voice loop ─────────────────────────────────────────────
 
 async function voiceLoop(): Promise<void> {
+  if (voiceLoopRunning) {
+    log('voice loop already running — skipping duplicate start')
+    return
+  }
+  voiceLoopRunning = true
+
   log('loading Silero VAD model...')
   await initVAD()
   log('VAD model loaded')
@@ -305,7 +312,15 @@ async function voiceLoop(): Promise<void> {
 
 // ─── Main ───────────────────────────────────────────────────
 
+let mainStarted = false
+
 async function main(): Promise<void> {
+  if (mainStarted) {
+    log('main already started — skipping duplicate initialization')
+    return
+  }
+  mainStarted = true
+
   await mcp.connect(new StdioServerTransport())
   log('connected to Claude Code')
 

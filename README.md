@@ -63,7 +63,7 @@ Run from your project directory:
 claude-call setup
 ```
 
-Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
+Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
 
 Then launch Claude Code with voice enabled:
 
@@ -96,6 +96,7 @@ silence:
 interrupt:
   keywords:
     - stop
+    - step
     - wait
     - hold on
     - pause
