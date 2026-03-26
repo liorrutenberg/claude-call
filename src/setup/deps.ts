@@ -68,7 +68,7 @@ export function checkDeps(): DepResult[] {
     installHint: 'brew install whisper-cpp',
   })
 
-  // piper
+  // piper (pip package, not brew)
   const piperPath = findBinary(['piper'], ['/opt/homebrew/bin/piper', '/usr/local/bin/piper'])
   results.push({
     name: 'piper',
@@ -76,7 +76,7 @@ export function checkDeps(): DepResult[] {
     required: true,
     found: !!piperPath,
     path: piperPath ?? undefined,
-    installHint: 'brew install piper',
+    installHint: 'pip install piper-tts',
   })
 
   // edge-tts

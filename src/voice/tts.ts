@@ -10,7 +10,7 @@
  */
 
 import { existsSync, writeFileSync, unlinkSync } from 'node:fs'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { applyPronunciation } from './pronunciation.js'
 import { loadConfig } from '../config.js'
 
@@ -25,6 +25,9 @@ function findPiper(): string | null {
   for (const p of paths) {
     if (existsSync(p)) return p
   }
+  // Check PATH (covers pip-installed piper in venvs or user bin)
+  const result = spawnSync('which', ['piper'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 })
+  if (result.status === 0) return result.stdout.toString().trim()
   return null
 }
 
