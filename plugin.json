@@ -1,0 +1,22 @@
+{
+  "name": "claude-call",
+  "version": "0.1.0",
+  "description": "Continuous two-way voice conversations for Claude Code",
+  "author": {
+    "name": "Lior Rutenberg"
+  },
+  "repository": "https://github.com/liorrutenberg/claude-call",
+  "license": "Apache-2.0",
+  "keywords": ["voice", "tts", "stt", "channel", "hands-free", "speech"],
+  "channels": [
+    {
+      "server": "voice"
+    }
+  ],
+  "mcpServers": {
+    "voice": {
+      "command": "npx",
+      "args": ["claude-call", "serve"]
+    }
+  }
+}

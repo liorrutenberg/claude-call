@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "voice": {
+      "command": "npx",
+      "args": ["claude-call", "serve"]
+    }
+  }
+}
