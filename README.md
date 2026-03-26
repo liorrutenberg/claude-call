@@ -49,12 +49,17 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Node.js 18+**
 - **Homebrew** (macOS)
 
-### Install and Setup
+### Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liorrutenberg/claude-call/main/install.sh | bash
+```
+
+### Setup
 
 Run from your project directory:
 
 ```bash
-npm install -g claude-call
 claude-call setup
 ```
 
