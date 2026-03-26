@@ -1,0 +1,53 @@
+{
+  "name": "claude-call",
+  "version": "0.1.0",
+  "description": "Continuous two-way voice conversations for Claude Code",
+  "type": "module",
+  "main": "dist/channel.js",
+  "bin": {
+    "claude-call": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "config",
+    "plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "setup": "node dist/cli.js setup",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "voice",
+    "tts",
+    "stt",
+    "mcp",
+    "channel",
+    "hands-free",
+    "speech"
+  ],
+  "author": "Lior Rutenberg",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liorrutenberg/claude-call.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "onnxruntime-node": "^1.21.0",
+    "yaml": "^2.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}
