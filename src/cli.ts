@@ -148,21 +148,18 @@ async function setup(): Promise<void> {
   writeln()
 
   await downloadWithProgress(MODELS.vad)
+  writeln()
 
-  // Whisper model — default to large-v3-turbo for accuracy
-  writeln()
-  writeln('  Whisper model sizes:')
-  writeln('    1. large   (~1.5 GB) — best accuracy (recommended)')
-  writeln('    2. base    (~141 MB) — faster, lower accuracy')
-  writeln()
-  const whisperChoice = await ask('  Choose model size', '1')
-  const whisperSize = whisperChoice === '2' ? 'base' : 'large'
+  // Whisper model — large-v3-turbo by default, offer base as fallback
+  let whisperSize = 'large'
+  if (!await confirm('  Download whisper-large-v3-turbo (1.5 GB)?')) {
+    whisperSize = 'base'
+  }
   const whisperModelKey = whisperSize === 'large' ? 'whisper-large' : 'whisper-base'
-  writeln()
   await downloadWithProgress(MODELS[whisperModelKey])
+  writeln()
 
   // Piper voice model
-  writeln()
   await downloadWithProgress(MODELS['piper-voice'])
   await downloadWithProgress(MODELS['piper-voice-config'])
   writeln()
