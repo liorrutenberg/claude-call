@@ -21,16 +21,18 @@ import {
   VAD_CHUNK_SAMPLES,
 } from './vad.js'
 import type { SilenceMode } from '../config.js'
+import {
+  hasStopSignal as runtimeHasStopSignal,
+  clearStopSignal as runtimeClearStopSignal,
+  hasPauseSignal,
+  setStopSignal,
+} from '../runtime.js'
 
 const SAMPLE_RATE = 16000
 const BYTES_PER_SAMPLE = 2
 
 /** Seconds with no speech before giving up on hearing anything. */
 const PRE_SPEECH_TIMEOUT_S = 15
-
-/** Signal file paths for cross-process coordination. */
-const STOP_FILE = '/tmp/claude-call-stop'
-const PAUSE_FILE = '/tmp/claude-call-pause'
 
 // ─── Audio utilities ────────────────────────────────────────
 
@@ -120,22 +122,24 @@ function createWavBuffer(pcmData: Uint8Array): Uint8Array {
 }
 
 // ─── Stop / pause signals ───────────────────────────────────
+// Now delegated to src/runtime.ts for per-run isolation.
+// Uses CLAUDE_CALL_RUN_DIR env var when set, falls back to global /tmp/ paths.
 
 function hasStopSignal(): boolean {
-  return existsSync(STOP_FILE)
+  return runtimeHasStopSignal()
 }
 
 function clearStopSignal(): void {
-  try { if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE) } catch { /* ignore */ }
+  runtimeClearStopSignal()
 }
 
 export function isPaused(): boolean {
-  return existsSync(PAUSE_FILE)
+  return hasPauseSignal()
 }
 
 /** Trigger stop signal to kill in-flight recording (e.g., when TTS starts). */
 export function triggerStop(): void {
-  try { writeFileSync(STOP_FILE, `stop at ${new Date().toISOString()}`) } catch { /* ignore */ }
+  setStopSignal()
 }
 
 // ─── Keyword interrupt monitor ──────────────────────────────

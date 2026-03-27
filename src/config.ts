@@ -188,3 +188,6 @@ export function getModelsDir(): string {
 export function getLogDir(): string {
   return join(loadConfig().dataDir, 'logs')
 }
+
+// Re-export per-run helpers from runtime module
+export { getProjectHash, getRunDir } from './runtime.js'
