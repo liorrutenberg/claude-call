@@ -242,65 +242,13 @@ function formatUptime(startedAt: string): string {
 }
 
 /**
- * Add voice server entry to a project's .mcp.json.
- * Creates the file if it doesn't exist, merges if it does.
- */
-function writeProjectMcpJson(projectRoot: string): void {
-  const mcpPath = join(projectRoot, '.mcp.json')
-  let existing: Record<string, unknown> = {}
-
-  if (existsSync(mcpPath)) {
-    try {
-      existing = JSON.parse(readFileSync(mcpPath, 'utf-8')) as Record<string, unknown>
-    } catch {
-      existing = {}
-    }
-  }
-
-  const servers = (existing.mcpServers ?? {}) as Record<string, unknown>
-  servers.voice = {
-    command: 'claude-call',
-    args: ['serve'],
-  }
-  existing.mcpServers = servers
-
-  writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + '\n')
-  writeln(`  Voice server added to ${mcpPath}`)
-}
-
-/**
  * Create .claude/commands/call-start.md and call-stop.md in the project.
- * In legacy mode, use pause file toggle instead of spawning a separate session.
  */
-function writeCommandFiles(projectRoot: string, legacyMode: boolean): void {
+function writeCommandFiles(projectRoot: string): void {
   const commandsDir = join(projectRoot, '.claude', 'commands')
   mkdirSync(commandsDir, { recursive: true })
 
-  let callStart: string
-  let callStop: string
-
-  if (legacyMode) {
-    // Legacy mode: toggle pause file (voice runs in main session)
-    callStart = `Resume voice input in the current session.
-
-\`\`\`bash
-rm -f /tmp/claude-call-pause
-\`\`\`
-
-Respond using the speak tool: "Voice resumed."
-`
-
-    callStop = `Pause voice input in the current session.
-
-\`\`\`bash
-touch /tmp/claude-call-pause
-\`\`\`
-
-Respond with "Voice paused." (text only, do not use speak tool).
-`
-  } else {
-    // Dual mode: spawn/kill separate call session
-    callStart = `Start a voice call session.
+  const callStart = `Start a voice call session.
 
 \`\`\`bash
 claude-call call start
@@ -309,7 +257,7 @@ claude-call call start
 After the call starts, the voice session will greet you automatically.
 `
 
-    callStop = `Stop the voice call session.
+  const callStop = `Stop the voice call session.
 
 \`\`\`bash
 claude-call call stop
@@ -317,7 +265,6 @@ claude-call call stop
 
 Respond with "Voice call ended." (text only).
 `
-  }
 
   const startPath = join(commandsDir, 'call-start.md')
   const stopPath = join(commandsDir, 'call-stop.md')
@@ -562,7 +509,7 @@ async function callStatus(): Promise<void> {
 
 // ─── Setup command ──────────────────────────────────────────
 
-async function setup(legacyMode: boolean): Promise<void> {
+async function setup(): Promise<void> {
   writeln()
   writeln('\x1b[1mclaude-call setup\x1b[0m  v' + VERSION)
   writeln('Continuous two-way voice conversations for Claude Code')
@@ -668,28 +615,20 @@ async function setup(legacyMode: boolean): Promise<void> {
   const projectRoot = findProjectRoot()
   if (projectRoot) {
     writeln(`  Detected project: ${projectRoot}`)
-    if (legacyMode) {
-      // Legacy mode: add voice directly to project's .mcp.json (single-session mode)
-      writeProjectMcpJson(projectRoot)
-    }
-    writeCommandFiles(projectRoot, legacyMode)
+    writeCommandFiles(projectRoot)
     effectiveProjectRoot = projectRoot
   } else {
     writeln('  No project root detected (no .git or package.json found).')
     if (await confirm('  Add to current directory?', false)) {
       const cwd = process.cwd()
-      if (legacyMode) {
-        // Legacy mode: add voice directly to .mcp.json (single-session mode)
-        writeProjectMcpJson(cwd)
-      }
-      writeCommandFiles(cwd, legacyMode)
+      writeCommandFiles(cwd)
       effectiveProjectRoot = cwd
     } else {
       writeln('  Skipping project integration.')
     }
   }
 
-  if (!legacyMode && effectiveProjectRoot) {
+  if (effectiveProjectRoot) {
     writeln('  Voice server will load only in call sessions (dual-mode)')
     writeln('  Use /call-start to begin a voice call')
   }
@@ -735,21 +674,13 @@ async function setup(legacyMode: boolean): Promise<void> {
   // Step 5: Done
   writeln('\x1b[1m5. Setup complete!\x1b[0m')
   writeln()
-  if (legacyMode) {
-    writeln('  Launch Claude Code with voice:')
-    writeln()
-    writeln('    \x1b[1mclaude --dangerously-load-development-channels server:voice\x1b[0m')
-    writeln()
-    writeln('  Then say \x1b[1m/call-start\x1b[0m to begin talking.')
-  } else {
-    writeln('  Start a voice call from Claude Code:')
-    writeln()
-    writeln('    \x1b[1m/call-start\x1b[0m')
-    writeln()
-    writeln('  This spawns a separate voice session. Stop it with \x1b[1m/call-stop\x1b[0m.')
-    writeln()
-    writeln('  Your main terminal stays free for typing.')
-  }
+  writeln('  Start a voice call from Claude Code:')
+  writeln()
+  writeln('    \x1b[1m/call-start\x1b[0m')
+  writeln()
+  writeln('  This spawns a separate voice session. Stop it with \x1b[1m/call-stop\x1b[0m.')
+  writeln()
+  writeln('  Your main terminal stays free for typing.')
   writeln()
   writeln('  \x1b[2mTo add voice to another project, run "claude-call setup" from that directory.\x1b[0m')
   writeln()
@@ -832,12 +763,9 @@ async function serve(): Promise<void> {
 const command = process.argv[2]
 const subcommand = process.argv[3]
 
-// Check for --legacy flag in setup command
-const hasLegacyFlag = process.argv.includes('--legacy')
-
 switch (command) {
   case 'setup':
-    setup(hasLegacyFlag).catch((err) => {
+    setup().catch((err) => {
       writeln(`\nSetup failed: ${(err as Error).message}`)
       process.exit(1)
     })
@@ -897,7 +825,6 @@ switch (command) {
     writeln()
     writeln('Commands:')
     writeln('  setup           Interactive first-run setup')
-    writeln('  setup --legacy  Setup for single-session mode (adds voice to .mcp.json)')
     writeln('  check           Verify dependencies and models')
     writeln('  serve           Start MCP channel server (used by Claude Code)')
     writeln('  call start      Start a voice call session')

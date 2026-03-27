@@ -83,15 +83,6 @@ Stop the call with:
 
 > **Multiple projects?** Run `claude-call setup` from each project directory. It adds the slash commands to whichever project you run it from.
 
-### Legacy Mode (Single Session)
-
-If you prefer the original single-session mode where voice runs in your main session:
-
-```bash
-claude-call setup --legacy
-claude --dangerously-load-development-channels server:voice
-```
-
 ## Voice Commands
 
 Once a voice session is active, you can control it hands-free:

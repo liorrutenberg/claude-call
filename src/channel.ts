@@ -334,33 +334,25 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 async function deliver(text: string): Promise<void> {
   log(`delivering: ${text}`)
 
-  // Call mode: write stream-json directly to FIFO
   const runDir = getRunDirFromEnv()
-  if (runDir) {
-    const msg = {
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: `<channel source="voice">${text}</channel>` }],
-      },
-    }
-    const json = JSON.stringify(msg) + '\n'
-    if (writeFifo(json)) {
-      log('delivered via FIFO')
-    } else {
-      log('FIFO delivery failed')
-    }
+  if (!runDir) {
+    log('ERROR: No run dir available (CLAUDE_CALL_RUN_DIR not set)')
     return
   }
 
-  // Legacy mode: MCP channel notification
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      content: text,
-      meta: { ts: new Date().toISOString() },
+  const msg = {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: `<channel source="voice">${text}</channel>` }],
     },
-  })
+  }
+  const json = JSON.stringify(msg) + '\n'
+  if (writeFifo(json)) {
+    log('delivered via FIFO')
+  } else {
+    log('FIFO delivery failed')
+  }
 }
 
 // ─── Voice loop ─────────────────────────────────────────────

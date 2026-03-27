@@ -186,11 +186,3 @@ The voice MCP server is never loaded in the main session. Instead:
 4. The main session's `.mcp.json` does not include voice
 
 This prevents accidental voice activation in the main terminal and eliminates resource contention between sessions.
-
-### Legacy Mode
-
-For single-session mode (voice in the main terminal):
-```bash
-claude-call setup --legacy
-```
-This adds the voice server to the project's `.mcp.json` and requires launching with `--dangerously-load-development-channels server:voice`.
