@@ -6,20 +6,37 @@
 
 Continuous two-way voice conversations for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Talk to Claude hands-free. Claude talks back. No push-to-talk, no cloud STT, fully local speech processing.
+Talk to Claude hands-free. Claude talks back. Your terminal stays free for typing. No push-to-talk, no cloud STT, fully local speech processing.
 
 ## How It Works
 
-claude-call is an MCP channel server that plugs into Claude Code. Unlike tool-based voice solutions, it uses the **channel protocol** — voice input arrives as `<channel source="voice">`, so Claude treats it identically to a typed message. No explicit tool calls needed.
+claude-call runs a **dual-session architecture**: voice lives in a separate headless Claude session so your main terminal is never blocked.
+
+```
+/call-start
+  ├─ Main session (interactive terminal) — typing, tools, normal Claude Code
+  └─ Call session (headless claude -p) — owns the mic, speaks responses,
+       delegates heavy work to background agents
+```
+
+Under the hood, the call session is an MCP channel server using the **channel protocol** — voice input arrives as `<channel source="voice">`, so Claude treats it identically to a typed message. No explicit tool calls needed.
 
 ```
 You speak → sox records → Silero VAD detects speech → Whisper transcribes →
-  Claude receives text → Claude calls speak tool → TTS synthesizes →
-    You hear the response (and can interrupt mid-sentence)
+  Call session receives text → acks immediately → dispatches background agents →
+    speaks result via TTS → you hear the response (and can interrupt mid-sentence)
 ```
 
 ## Features
 
+### Dual Session Model
+- **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
+- **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
+- **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
+- **Artifact workspace** — Call session writes reports and detailed output to `.exo-call/artifacts/` for the main session to read
+- **Audio feedback** — Thinking pulse (waiting for response), start/resume chime, pause chime — so you always know the system state
+
+### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
 - **Echo suppression** — Recording automatically mutes during TTS playback
 - **Whisper STT** — Local speech-to-text via whisper.cpp (server mode + CLI fallback)
@@ -148,34 +165,56 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                Claude Code Session              │
-│                                                 │
-│  <channel source="voice">transcribed text</...> │
-│                     ↑                     │     │
-│                     │              speak tool    │
-│                     │                     ↓     │
-│  ┌──────────────────┴─────────────────────┐     │
-│  │         MCP Channel Server             │     │
-│  │         (channel.ts)                   │     │
-│  │                                        │     │
-│  │  Voice Loop        Speak Handler       │     │
-│  │  ┌──────────┐     ┌──────────────┐    │     │
-│  │  │ Record   │     │ TTS Cascade  │    │     │
-│  │  │ ↓        │     │ ↓            │    │     │
-│  │  │ VAD      │     │ Sentence     │    │     │
-│  │  │ ↓        │     │ Pipeline     │    │     │
-│  │  │ Whisper  │     │ ↓            │    │     │
-│  │  │ ↓        │     │ Playback     │    │     │
-│  │  │ Filter   │     │              │    │     │
-│  │  │ ↓        │     │ Keyword      │    │     │
-│  │  │ Deliver  │     │ Monitor      │    │     │
-│  │  └──────────┘     └──────────────┘    │     │
-│  └────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────┐
+│  MAIN SESSION (interactive)     │
+│  No voice MCP loaded            │
+│  /call-start → spawns call      │
+│  /call-stop  → kills call       │
+│  Terminal stays 100% free       │
+│  Reads artifacts from .exo-call/│
+└────────────┬────────────────────┘
+             │ .exo-call/ (shared workspace)
+┌────────────┴────────────────────┐
+│  CALL SESSION (headless)        │
+│  claude -p + stream-json + FIFO │
+│  Voice MCP (sole mic owner)     │
+│                                 │
+│  Voice Loop        Speak Handler│
+│  ┌──────────┐     ┌───────────┐ │
+│  │ Record   │     │ TTS       │ │
+│  │ ↓        │     │ Cascade   │ │
+│  │ VAD      │     │ ↓         │ │
+│  │ ↓        │     │ Sentence  │ │
+│  │ Whisper  │     │ Pipeline  │ │
+│  │ ↓        │     │ ↓         │ │
+│  │ Filter   │     │ Playback  │ │
+│  │ ↓        │     │ ↓         │ │
+│  │ FIFO     │     │ Keyword   │ │
+│  │ Deliver  │     │ Monitor   │ │
+│  └──────────┘     └───────────┘ │
+│                                 │
+│  Audio Feedback                 │
+│  ┌───────────────────────────┐  │
+│  │ Thinking pulse (waiting)  │  │
+│  │ Start / resume chime      │  │
+│  │ Pause chime               │  │
+│  └───────────────────────────┘  │
+└─────────────────────────────────┘
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the deep dive.
+### Shared Workspace
+
+```
+.exo-call/
+├── session.json      # PIDs, paths, status
+├── inbox.jsonl       # Machine-readable events (call → main)
+└── artifacts/        # Reports, summaries, detailed output
+    └── *.md
+```
+
+The call session speaks concise summaries. When you say "show it" or "put it in the workspace", detailed output is written to `artifacts/` where the main session can read it.
+
+See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 
 ## Pronunciation
 
