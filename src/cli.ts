@@ -39,7 +39,7 @@ const VERSION = '0.1.0'
 // ─── Call Session Prompt ─────────────────────────────────────
 
 function buildCallSessionPrompt(projectRoot: string): string {
-  const eventsFile = join(projectRoot, '.exo-call', 'events.jsonl')
+  const eventsFile = join(projectRoot, '.claude-call', 'events.jsonl')
   const sessionLog = '$CLAUDE_CALL_RUN_DIR/stdout.log'
   return `# Call Session
 
@@ -332,7 +332,7 @@ async function callStart(): Promise<void> {
   let claudePid: number | null = null
   let fifoWriterPid: number | null = null
 
-  // 4. Initialize workspace (creates .exo-call/ directory)
+  // 4. Initialize workspace (creates .claude-call/ directory)
   initWorkspace(projectRoot)
 
   try {

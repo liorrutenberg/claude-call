@@ -28,10 +28,10 @@ Two independent Claude sessions:
 │  /call-stop  → kills call       │
 │  /call-status → health check    │
 │  Terminal stays 100% free       │
-│  Reads artifacts from .exo-call/ │
-│  artifacts/ when pushed          │
+│  Reads events from .claude-call/  │
+│  events.jsonl when pushed         │
 └────────────┬─────────────────────┘
-             │ .exo-call/ (shared workspace)
+             │ .claude-call/ (shared workspace)
 ┌────────────┴────────────────────┐
 │  CALL SESSION (headless)        │
 │  claude -p + stream-json + FIFO │
@@ -40,7 +40,7 @@ Two independent Claude sessions:
 │  FIFO (no relay watcher)        │
 │  Loads call-session prompt      │
 │  Can read main session context  │
-│  Pushes artifacts to workspace  │
+│  Writes event pointers          │
 └─────────────────────────────────┘
 ```
 
@@ -61,17 +61,16 @@ Global `/tmp/claude-call-stop` and `/tmp/claude-call-pause` move here to prevent
 
 Main session never loads voice MCP. A per-run MCP config is generated and passed only to the headless call process. The main session's `.mcp.json` does not include voice in dual mode.
 
-### 4. Shared workspace at `.exo-call/`
+### 4. Shared workspace at `.claude-call/`
 
 ```
-.exo-call/
+.claude-call/
 ├── session.json      # PIDs, paths, status, session IDs
 ├── inbox.jsonl       # Machine-readable events (call → main)
-└── artifacts/        # Human-readable output (reports, summaries)
-    └── *.md
+└── events.jsonl      # Event pointers from call session (processed by main)
 ```
 
-Call session speaks summaries. When user says "show it" or "put it in the workspace", call writes to `artifacts/`. No session injection — files on disk.
+Call session speaks summaries. When user says "show it" or "put it on screen", call writes an event pointer to `events.jsonl`. The main session's watcher picks it up, fetches the full message from the session log, and displays it.
 
 ### 5. Audio feedback cues
 
@@ -94,9 +93,9 @@ The call session loads a dedicated prompt that defines its personality and rules
 
 **Shared screen model:**
 - Main terminal = shared screen. Call session references it naturally.
-- "I'll put the report in the workspace" → writes artifact
+- "I'll put that on screen" → writes event pointer, main session displays it
 - "Check the main session" → reads main session conversation JSON
-- Heavy output goes to artifacts, summaries go to voice
+- Heavy output goes to event pointers, summaries go to voice
 
 **Delegation rules:**
 - Anything that takes >2s thinking → background agent
@@ -131,8 +130,8 @@ Default `claude` does NOT start call mode. Voice activates only via:
 | 2 | CLI `call start/stop/status` | `src/cli.ts` | Spawn headless session, per-run MCP config, cleanup on stop, health output |
 | 3 | Remove voice from main session | `src/cli.ts`, `plugin.json`, docs | Dual-mode setup: voice MCP only loads in call process |
 | 4 | Direct FIFO delivery | `src/channel.ts`, `src/voice/recorder.ts` | `deliver()` writes stream-json to FIFO in call mode; channel notifications for legacy single-session |
-| 5 | Shared workspace inbox | new `src/workspace.ts`, `src/cli.ts` | `.exo-call/` dir, inbox events, artifact writing |
-| 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, artifact rules |
+| 5 | Shared workspace inbox | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, inbox events, event pointers |
+| 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, event pointer rules |
 | 7 | Audio cue management | new `src/voice/feedback.ts`, `src/voice/tts.ts`, `src/channel.ts`, `src/config.ts` | Separate cue playback from TTS, start/pause/thinking sounds |
 | 8 | Crash supervision & cleanup | `src/cli.ts`, `src/channel.ts`, `src/voice/recorder.ts` | Heartbeat, broken-pipe handling, targeted process kill (only owned children) |
 | 9 | Latency measurement | `src/channel.ts`, `src/cli.ts` | Timestamp pipeline stages, log end-to-end numbers |

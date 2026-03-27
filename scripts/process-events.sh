@@ -2,7 +2,7 @@
 #
 # process-events.sh — Process one event pointer from the call session.
 #
-# Reads the first event from .exo-call/events.jsonl, extracts the referenced
+# Reads the first event from .claude-call/events.jsonl, extracts the referenced
 # message from the session log (stdout.log), outputs formatted content,
 # then removes the processed event line.
 #
@@ -25,7 +25,7 @@ if [[ -z "$PROJECT_ROOT" ]]; then
   exit 1
 fi
 
-EVENTS_FILE="$PROJECT_ROOT/.exo-call/events.jsonl"
+EVENTS_FILE="$PROJECT_ROOT/.claude-call/events.jsonl"
 
 # No events file or empty — exit silently
 if [[ ! -f "$EVENTS_FILE" ]]; then

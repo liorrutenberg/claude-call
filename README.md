@@ -33,7 +33,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
-- **Artifact workspace** — Call session writes reports and detailed output to `.exo-call/artifacts/` for the main session to read
+- **Event pointers** — Call session writes event pointers to `.claude-call/events.jsonl` so the main session can display detailed output
 - **Audio feedback** — Thinking pulse (waiting for response), start/resume chime, pause chime — so you always know the system state
 
 ### Voice Engine
@@ -171,9 +171,9 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 │  /call-start → spawns call      │
 │  /call-stop  → kills call       │
 │  Terminal stays 100% free       │
-│  Reads artifacts from .exo-call/│
+│  Reads events from .claude-call/   │
 └────────────┬────────────────────┘
-             │ .exo-call/ (shared workspace)
+             │ .claude-call/ (shared workspace)
 ┌────────────┴────────────────────┐
 │  CALL SESSION (headless)        │
 │  claude -p + stream-json + FIFO │
@@ -205,14 +205,13 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 ### Shared Workspace
 
 ```
-.exo-call/
+.claude-call/
 ├── session.json      # PIDs, paths, status
 ├── inbox.jsonl       # Machine-readable events (call → main)
-└── artifacts/        # Reports, summaries, detailed output
-    └── *.md
+└── events.jsonl      # Event pointers from call session (processed by main)
 ```
 
-The call session speaks concise summaries. When you say "show it" or "put it in the workspace", detailed output is written to `artifacts/` where the main session can read it.
+The call session speaks concise summaries. When you say "show it" or "put it on screen", an event pointer is written to `events.jsonl` so the main session can fetch and display the full output.
 
 See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 

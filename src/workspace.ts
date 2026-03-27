@@ -1,7 +1,7 @@
 /**
  * Shared workspace for call-to-main session communication.
  *
- * Location: <projectRoot>/.exo-call/
+ * Location: <projectRoot>/.claude-call/
  *
  * Contents:
  * - session.json   — current call session info (copied from runtime status)
@@ -24,7 +24,7 @@ import { join } from 'node:path'
 
 export interface InboxEvent {
   ts: string
-  type: 'artifact' | 'message' | 'status' | 'result'
+  type: 'message' | 'status' | 'result'
   content: string
   metadata?: Record<string, unknown>
 }
@@ -37,7 +37,7 @@ export interface InboxEventInput {
 
 // ─── Path helpers ───────────────────────────────────────────
 
-const WORKSPACE_DIR = '.exo-call'
+const WORKSPACE_DIR = '.claude-call'
 
 /**
  * Get the workspace path for a project.

@@ -119,7 +119,7 @@ Sox `rec` is used for mic input. Key details:
 - **Native rate detection**: Probes the default input device's sample rate to avoid resampling artifacts
 - **Resampling**: If native rate differs from 16 kHz, linear interpolation downsamples in-process
 - **WAV creation**: Raw PCM is wrapped in a WAV header (44 bytes) for Whisper compatibility
-- **Signal files**: `/tmp/claude-call-stop` and `/tmp/claude-call-pause` for cross-process coordination
+- **Signal files**: Per-run `stop` and `pause` files in `~/.claude-call/runs/<project-hash>/` for cross-process coordination
 
 ## Data Flow
 
