@@ -11,7 +11,27 @@
  */
 
 import { spawn } from 'node:child_process'
-import { loadConfig } from '../config.js'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { loadConfig, getLogDir } from '../config.js'
+
+// ─── Logging ─────────────────────────────────────────────────
+
+let logFile: string | null = null
+
+function getLogFile(): string {
+  if (!logFile) {
+    const dir = getLogDir()
+    mkdirSync(dir, { recursive: true })
+    logFile = `${dir}/channel.log`
+  }
+  return logFile
+}
+
+function log(msg: string): void {
+  const line = `[${new Date().toISOString()}] [feedback] ${msg}\n`
+  process.stderr.write(line)
+  try { appendFileSync(getLogFile(), line) } catch { /* ignore */ }
+}
 
 // ─── Active process tracking ─────────────────────────────────
 
@@ -32,12 +52,13 @@ function getVolume(): number {
 /**
  * Play a tone without waiting (fire and forget).
  */
-function playToneAsync(args: string[]): void {
+function playToneAsync(args: string[], label: string): void {
   if (!isEnabled()) return
 
+  log(`${label}`)
   const proc = spawn('play', args, { stdio: 'ignore' })
   // Don't track single-shot chimes — they're short enough
-  proc.once('error', () => {})
+  proc.once('error', (err) => log(`play error (${label}): ${err.message}`))
 }
 
 // ─── Start/Resume Chime ──────────────────────────────────────
@@ -55,7 +76,7 @@ export function playStartChime(): void {
     'synth', '0.08', 'sine', '800',
     'vol', String(vol),
     'fade', 'q', '0.01', '-0', '0.01',
-  ])
+  ], 'start chime')
 }
 
 // ─── Pause Chime ─────────────────────────────────────────────
@@ -73,7 +94,7 @@ export function playPauseChime(): void {
     'synth', '0.12', 'sine', '500',
     'vol', String(vol),
     'fade', 'q', '0.01', '-0', '0.02',
-  ])
+  ], 'pause chime')
 }
 
 // ─── Thinking Pulse ──────────────────────────────────────────
@@ -82,13 +103,13 @@ export function playPauseChime(): void {
  * Play a single thinking tick — very soft, short click.
  */
 function playThinkingTick(): void {
-  const vol = getVolume() * 0.5 // Even quieter than chimes
+  const vol = getVolume() * 0.6 // Softer than chimes but clearly audible
   playToneAsync([
     '-n', '-q',
     'synth', '0.05', 'sine', '440',
     'vol', String(vol),
     'fade', 'q', '0.01', '-0', '0.02',
-  ])
+  ], 'thinking tick')
 }
 
 /**
@@ -100,6 +121,7 @@ export function startThinkingPulse(): void {
   if (!isEnabled()) return
   stopThinkingPulse() // Clear any existing
 
+  log('thinking pulse started')
   thinkingTimeout = setTimeout(() => {
     // Play first tick
     playThinkingTick()
@@ -115,6 +137,7 @@ export function startThinkingPulse(): void {
  * Stop the thinking pulse immediately.
  */
 export function stopThinkingPulse(): void {
+  const wasActive = thinkingTimeout !== null || thinkingInterval !== null
   if (thinkingTimeout) {
     clearTimeout(thinkingTimeout)
     thinkingTimeout = null
@@ -126,6 +149,9 @@ export function stopThinkingPulse(): void {
   if (thinkingMaxTimeout) {
     clearTimeout(thinkingMaxTimeout)
     thinkingMaxTimeout = null
+  }
+  if (wasActive) {
+    log('thinking pulse stopped')
   }
 }
 
