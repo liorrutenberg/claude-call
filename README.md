@@ -63,7 +63,7 @@ Run from your project directory:
 claude-call setup
 ```
 
-Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
+Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
 
 Then launch Claude Code with voice enabled:
 
@@ -74,6 +74,20 @@ claude --dangerously-load-development-channels server:voice
 Say `/call-start` and start talking.
 
 > **Multiple projects?** Run `claude-call setup` from each project directory. It adds the MCP config and slash commands to whichever project you run it from.
+
+## Voice Commands
+
+Once a voice session is active, you can control it hands-free:
+
+| Command | What it does |
+|---|---|
+| **"exo"** | Say the wake word while Claude is speaking to **interrupt** playback mid-sentence |
+| **"exo pause"** | **Pause** voice input — the mic stays alive but stops processing speech |
+| **"exo start"** | **Resume** voice input after a pause |
+
+Whisper sometimes mishears these phrases, so common variants (e.g., "echo pause", "exo resume") are recognized automatically.
+
+> **Configurable:** The interrupt keywords and wake word can be changed in `~/.claude-call/config.yaml` under the `interrupt.keywords` section. See [docs/configuration.md](docs/configuration.md) for details.
 
 ## Configuration
 
@@ -96,6 +110,7 @@ silence:
 interrupt:
   keywords:
     - stop
+    - step
     - wait
     - hold on
     - pause

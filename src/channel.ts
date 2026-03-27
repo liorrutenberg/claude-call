@@ -22,6 +22,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { existsSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 
 import { loadConfig, getLogDir } from './config.js'
 import { initVAD } from './voice/vad.js'
@@ -75,9 +76,66 @@ function isMeaningful(text: string): boolean {
   return !JUNK_TRANSCRIPTS.has(t)
 }
 
+// ─── Soft pause ─────────────────────────────────────────────
+
+const PAUSE_PHRASES = ['exo pause', 'echo pause', 'exo paws', 'echo paws', 'exel pause', 'exo pulse', 'exopause', 'echopause', 'extra pause']
+const UNPAUSE_PHRASES = ['exo start', 'echo start', 'exo resume', 'echo resume', 'exo unpause', 'echo unpause', 'exhale start', 'exhaust start', 'exo go', 'echo go', 'exostart', 'echostart']
+
+function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/[-,.:;!?]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function matchesPause(text: string): boolean {
+  const t = normalizeForMatch(text)
+  return PAUSE_PHRASES.some(p => t.includes(p))
+}
+
+function matchesUnpause(text: string): boolean {
+  const t = normalizeForMatch(text)
+  return UNPAUSE_PHRASES.some(p => t.includes(p))
+}
+
+/**
+ * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
+ * Resolves when "exo start" / "exo resume" is detected.
+ */
+async function waitForUnpause(): Promise<void> {
+  log('soft paused — listening for unpause keyword...')
+
+  const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
+
+  return new Promise<void>((resolve) => {
+    kwMonitor.onBurst = async (wavPath: string) => {
+      try {
+        const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
+        log(`unpause check: "${raw}"`)
+        if (matchesUnpause(raw)) {
+          softPaused = false
+          log('unpaused by voice command')
+          kwMonitor.stop()
+          resolve()
+        }
+      } catch (err) {
+        log(`unpause transcription error: ${(err as Error).message}`)
+      }
+    }
+
+    // Also exit if hard-paused or externally unpaused
+    const check = setInterval(() => {
+      if (!softPaused || isPaused()) {
+        clearInterval(check)
+        kwMonitor.stop()
+        resolve()
+      }
+    }, 500)
+  })
+}
+
 // ─── State ──────────────────────────────────────────────────
 
 let muted = false
+let softPaused = false
+let voiceLoopRunning = false
 
 // ─── MCP Channel Server ────────────────────────────────────
 
@@ -127,7 +185,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const config = loadConfig()
       const interruptKeywords = config.interrupt.keywords
       let interrupted = false
-      const kwMonitor = await startKeywordMonitor(3, 1.5, 1500)
+      const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
       kwMonitor.onBurst = async (wavPath: string) => {
         try {
@@ -185,6 +243,12 @@ async function deliver(text: string): Promise<void> {
 // ─── Voice loop ─────────────────────────────────────────────
 
 async function voiceLoop(): Promise<void> {
+  if (voiceLoopRunning) {
+    log('voice loop already running — skipping duplicate start')
+    return
+  }
+  voiceLoopRunning = true
+
   log('loading Silero VAD model...')
   await initVAD()
   log('VAD model loaded')
@@ -210,6 +274,14 @@ async function voiceLoop(): Promise<void> {
 
       if (isPaused()) {
         await new Promise(r => setTimeout(r, 500))
+        continue
+      }
+
+      if (softPaused) {
+        await waitForUnpause()
+        if (softPaused) continue // hard pause or other exit
+        log('voice loop resumed from soft pause')
+        await deliver('[Voice resumed]')
         continue
       }
 
@@ -288,6 +360,16 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
+      // Soft pause trigger — "exo pause" keeps mic alive but stops processing
+      if (matchesPause(text)) {
+        softPaused = true
+        log(`soft pause triggered: "${text}"`)
+        try {
+          await deliver('[Voice paused — say "exo start" to resume]')
+        } catch { /* ignore */ }
+        continue
+      }
+
       log(`heard: ${text}`)
 
       try {
@@ -303,9 +385,37 @@ async function voiceLoop(): Promise<void> {
   }
 }
 
+// ─── Cleanup stale processes ────────────────────────────────
+
+function killStaleRecProcesses(): void {
+  try {
+    const myPid = process.pid
+    const out = execSync('pgrep -lf "rec -r"', { timeout: 3000 }).toString()
+    const pids = out.split('\n')
+      .map(line => parseInt(line.trim(), 10))
+      .filter(pid => !isNaN(pid) && pid !== myPid)
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+    }
+    if (pids.length > 0) {
+      log(`killed ${pids.length} stale rec process(es): ${pids.join(', ')}`)
+    }
+  } catch { /* no matching processes */ }
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
+let mainStarted = false
+
 async function main(): Promise<void> {
+  if (mainStarted) {
+    log('main already started — skipping duplicate initialization')
+    return
+  }
+  mainStarted = true
+
+  killStaleRecProcesses()
+
   await mcp.connect(new StdioServerTransport())
   log('connected to Claude Code')
 

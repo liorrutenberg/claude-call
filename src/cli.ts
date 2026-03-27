@@ -9,10 +9,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { execSync, spawn } from 'node:child_process'
 import { stringify as stringifyYaml } from 'yaml'
-import { loadConfig } from './config.js'
+import { loadConfig, getModelsDir } from './config.js'
 import { checkDeps, formatDepsReport, installMissing } from './setup/deps.js'
 import { MODELS, downloadWithProgress, isModelDownloaded } from './setup/models.js'
 
@@ -40,6 +41,46 @@ async function confirm(prompt: string, defaultYes = true): Promise<boolean> {
   const answer = await ask(`${prompt} ${hint}`)
   if (!answer) return defaultYes
   return answer.toLowerCase().startsWith('y')
+}
+
+/**
+ * Find a binary in PATH. Returns the full path or null.
+ */
+function findBinaryInPath(name: string): string | null {
+  try {
+    return execSync(`which ${name}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Check whisper-server health endpoint.
+ */
+async function checkWhisperHealth(): Promise<boolean> {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 2000)
+    const res = await fetch('http://127.0.0.1:8178/health', { signal: controller.signal })
+    clearTimeout(timeout)
+    if (!res.ok) return false
+    const data = (await res.json()) as { status?: string }
+    return data.status === 'ok'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Wait for whisper-server health check to pass, polling every 500ms.
+ */
+async function waitForWhisperHealth(timeoutMs: number): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (await checkWhisperHealth()) return true
+    await new Promise(r => setTimeout(r, 500))
+  }
+  return false
 }
 
 /**
@@ -172,8 +213,99 @@ async function setup(): Promise<void> {
   await downloadWithProgress(MODELS['piper-voice-config'])
   writeln()
 
-  // Step 3: Write global config
-  writeln('\x1b[1m3. Writing configuration...\x1b[0m')
+  // Step 2b: Start whisper-server if available
+  writeln('\x1b[1m   Starting whisper-server...\x1b[0m')
+  writeln()
+
+  let whisperServerStarted = false
+  const whisperServerBinary = findBinaryInPath('whisper-server')
+  const whisperModelFile = join(getModelsDir(), whisperSize === 'large' ? 'ggml-large-v3-turbo.bin' : 'ggml-base.bin')
+
+  if (whisperServerBinary) {
+    if (existsSync(whisperModelFile)) {
+      try {
+        // Check if whisper-server is already running on this port
+        const alreadyRunning = await checkWhisperHealth()
+        if (alreadyRunning) {
+          writeln('  whisper-server already running on 127.0.0.1:8178')
+          whisperServerStarted = true
+        } else {
+          const serverProc = spawn(whisperServerBinary, [
+            '-m', whisperModelFile,
+            '--port', '8178',
+            '--host', '127.0.0.1',
+            '-t', '4',
+            '-nt',
+            '--convert',
+          ], {
+            stdio: 'ignore',
+            detached: true,
+          })
+          serverProc.unref()
+
+          // Wait up to 5 seconds for health check
+          whisperServerStarted = await waitForWhisperHealth(5000)
+          if (whisperServerStarted) {
+            writeln(`  \x1b[32mwhisper-server started\x1b[0m (pid ${serverProc.pid}, port 8178)`)
+          } else {
+            writeln('  \x1b[33mwhisper-server started but health check timed out\x1b[0m')
+            writeln('  It may still be loading the model. The server will be available shortly.')
+          }
+        }
+      } catch (err) {
+        writeln(`  \x1b[33mFailed to start whisper-server: ${(err as Error).message}\x1b[0m`)
+      }
+    } else {
+      writeln(`  \x1b[33mWhisper model not found at ${whisperModelFile} — skipping server start\x1b[0m`)
+    }
+  } else {
+    writeln('  \x1b[2mwhisper-server not found (optional, from whisper-cpp brew package) — skipping\x1b[0m')
+  }
+  writeln()
+
+  // Step 3: Project integration
+  writeln('\x1b[1m3. Project integration...\x1b[0m')
+  writeln()
+
+  let effectiveProjectRoot: string | null = null
+  const projectRoot = findProjectRoot()
+  if (projectRoot) {
+    writeln(`  Detected project: ${projectRoot}`)
+    writeProjectMcpJson(projectRoot)
+    writeCommandFiles(projectRoot)
+    effectiveProjectRoot = projectRoot
+  } else {
+    writeln('  No project root detected (no .git or package.json found).')
+    if (await confirm('  Add to current directory?', false)) {
+      const cwd = process.cwd()
+      writeProjectMcpJson(cwd)
+      writeCommandFiles(cwd)
+      effectiveProjectRoot = cwd
+    } else {
+      writeln('  Skipping project integration. You can manually add to .mcp.json later.')
+    }
+  }
+
+  // Look for pronunciation.yaml in the project directory
+  let pronunciationFile: string | undefined
+  if (effectiveProjectRoot) {
+    const pronunciationPaths = [
+      join(effectiveProjectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
+      join(effectiveProjectRoot, 'pronunciation.yaml'),
+      join(effectiveProjectRoot, 'config', 'pronunciation.yaml'),
+    ]
+    for (const p of pronunciationPaths) {
+      if (existsSync(p)) {
+        pronunciationFile = resolve(p)
+        writeln(`  Found pronunciation dictionary: ${pronunciationFile}`)
+        break
+      }
+    }
+  }
+  writeln()
+
+  // Step 4: Write global config
+  writeln('\x1b[1m4. Writing configuration...\x1b[0m')
   writeln()
 
   const config = loadConfig()
@@ -185,31 +317,10 @@ async function setup(): Promise<void> {
     if (!await confirm(`  Config exists at ${configPath}. Overwrite?`, false)) {
       writeln('  Keeping existing config.')
     } else {
-      writeConfigFile(configPath, whisperSize)
+      writeConfigFile(configPath, whisperSize, pronunciationFile)
     }
   } else {
-    writeConfigFile(configPath, whisperSize)
-  }
-  writeln()
-
-  // Step 4: Add to project .mcp.json + create command files
-  writeln('\x1b[1m4. Project integration...\x1b[0m')
-  writeln()
-
-  const projectRoot = findProjectRoot()
-  if (projectRoot) {
-    writeln(`  Detected project: ${projectRoot}`)
-    writeProjectMcpJson(projectRoot)
-    writeCommandFiles(projectRoot)
-  } else {
-    writeln('  No project root detected (no .git or package.json found).')
-    if (await confirm('  Add to current directory?', false)) {
-      const cwd = process.cwd()
-      writeProjectMcpJson(cwd)
-      writeCommandFiles(cwd)
-    } else {
-      writeln('  Skipping project integration. You can manually add to .mcp.json later.')
-    }
+    writeConfigFile(configPath, whisperSize, pronunciationFile)
   }
   writeln()
 
@@ -226,25 +337,30 @@ async function setup(): Promise<void> {
   writeln()
 }
 
-function writeConfigFile(path: string, whisperSize: string): void {
-  const config = {
+function writeConfigFile(configPath: string, whisperSize: string, pronunciationFile?: string): void {
+  const config: Record<string, unknown> = {
     tts: {
       engine: 'auto' as const,
       rate: 1.25,
     },
     stt: {
       modelSize: whisperSize,
+      serverUrl: 'http://127.0.0.1:8178',
     },
     silence: {
       mode: 'quick' as const,
     },
     interrupt: {
-      keywords: ['stop', 'wait', 'hold on', 'pause', 'hey'],
+      keywords: ['stop', 'step', 'wait', 'hold on', 'pause', 'hey'],
     },
   }
 
-  writeFileSync(path, stringifyYaml(config))
-  writeln(`  Config written to ${path}`)
+  if (pronunciationFile) {
+    config.pronunciation = { file: pronunciationFile }
+  }
+
+  writeFileSync(configPath, stringifyYaml(config))
+  writeln(`  Config written to ${configPath}`)
 }
 
 // ─── Check command ──────────────────────────────────────────
