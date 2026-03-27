@@ -96,6 +96,28 @@ function matchesUnpause(text: string): boolean {
   return UNPAUSE_PHRASES.some(p => t.includes(p))
 }
 
+// ─── Wake word filter (dual mode) ────────────────────────────
+
+const WAKE_PREFIXES = ['exo ', 'echo ', 'exel ', 'exo, ', 'echo, ', 'exo. ', 'echo. ']
+
+/**
+ * Extract the text after the wake word prefix.
+ * Returns null if no wake word found, or the stripped text if found.
+ */
+function extractAfterWakeWord(text: string): string | null {
+  const t = normalizeForMatch(text)
+  for (const prefix of WAKE_PREFIXES) {
+    if (t.startsWith(prefix)) {
+      // Find position in original text and strip
+      const idx = text.toLowerCase().indexOf(prefix.trimEnd())
+      if (idx >= 0) {
+        return text.slice(idx + prefix.trimEnd().length).trim()
+      }
+    }
+  }
+  return null
+}
+
 /**
  * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
  * Resolves when "exo start" / "exo resume" is detected.
@@ -447,6 +469,7 @@ async function voiceLoop(): Promise<void> {
       }
 
       // Soft pause trigger — "exo pause" keeps mic alive but stops processing
+      // Must check BEFORE wake word stripping so "exo pause" matches
       if (matchesPause(text)) {
         softPaused = true
         log(`soft pause triggered: "${text}"`)
@@ -454,6 +477,17 @@ async function voiceLoop(): Promise<void> {
           await deliver('[Voice paused — say "exo start" to resume]')
         } catch { /* ignore */ }
         continue
+      }
+
+      // Wake word filter in dual mode — require "exo" prefix
+      // Applied after pause check so "exo pause" still works
+      if (getRunDirFromEnv() && config.wakeWord.enabled) {
+        const stripped = extractAfterWakeWord(text)
+        if (!stripped) {
+          log(`filtered (no wake word): "${text}"`)
+          continue
+        }
+        text = stripped
       }
 
       log(`heard: ${text}`)

@@ -40,6 +40,10 @@ export interface PronunciationConfig {
   file: string
 }
 
+export interface WakeWordConfig {
+  enabled: boolean
+}
+
 export interface Config {
   dataDir: string
   tts: TtsConfig
@@ -47,6 +51,7 @@ export interface Config {
   silence: SilenceConfig
   interrupt: InterruptConfig
   pronunciation: PronunciationConfig
+  wakeWord: WakeWordConfig
 }
 
 // ─── Defaults ───────────────────────────────────────────────
@@ -77,6 +82,9 @@ function defaults(): Config {
     pronunciation: {
       file: '',
     },
+    wakeWord: {
+      enabled: true,
+    },
   }
 }
 
@@ -89,6 +97,7 @@ interface YamlConfig {
   silence?: Partial<SilenceConfig>
   interrupt?: Partial<InterruptConfig>
   pronunciation?: Partial<PronunciationConfig>
+  wakeWord?: Partial<WakeWordConfig>
 }
 
 function loadYaml(path: string): YamlConfig {
@@ -147,6 +156,9 @@ function applyEnvOverrides(config: Config): void {
 
   const pronFile = env('PRONUNCIATION_FILE')
   if (pronFile) config.pronunciation.file = pronFile
+
+  const wakeWordEnabled = env('WAKE_WORD_ENABLED')
+  if (wakeWordEnabled !== undefined) config.wakeWord.enabled = wakeWordEnabled !== 'false' && wakeWordEnabled !== '0'
 }
 
 // ─── Merge ──────────────────────────────────────────────────
@@ -161,6 +173,7 @@ function merge(base: Config, yaml: YamlConfig): Config {
       keywords: yaml.interrupt?.keywords ?? base.interrupt.keywords,
     },
     pronunciation: { ...base.pronunciation, ...yaml.pronunciation },
+    wakeWord: { ...base.wakeWord, ...yaml.wakeWord },
   }
 }
 
