@@ -29,6 +29,7 @@ import {
   ensureRunDir,
   type StatusFile,
 } from './runtime.js'
+import { initWorkspace } from './workspace.js'
 
 const VERSION = '0.1.0'
 
@@ -279,8 +280,11 @@ async function callStart(): Promise<void> {
   let claudePid: number | null = null
   let fifoWriterPid: number | null = null
 
+  // 4. Initialize workspace (creates .claude/call/ directory)
+  initWorkspace(projectRoot)
+
   try {
-    // 4. Create FIFO
+    // 5. Create FIFO
     const fifoPath = getFifoPath(runDir)
     if (existsSync(fifoPath)) {
       spawnSync('rm', ['-f', fifoPath])
@@ -289,10 +293,10 @@ async function callStart(): Promise<void> {
       throw new Error(`Failed to create FIFO at ${fifoPath}`)
     }
 
-    // 5. Generate per-run MCP config (copies all servers from project config)
+    // 6. Generate per-run MCP config (copies all servers from project config)
     const mcpConfigPath = generateMcpConfig(runDir, projectRoot)
 
-    // 6. Start persistent FIFO writer to keep FIFO open
+    // 7. Start persistent FIFO writer to keep FIFO open
     // Use exec so the PID is the real sleep process, not sh
     const fifoWriter = spawn('sh', ['-c', `exec sleep 999999 > "${fifoPath}"`], {
       detached: true,
@@ -301,7 +305,7 @@ async function callStart(): Promise<void> {
     fifoWriter.unref()
     fifoWriterPid = fifoWriter.pid!
 
-    // 7. Spawn headless claude with FIFO as stdin via shell redirection
+    // 8. Spawn headless claude with FIFO as stdin via shell redirection
     // Use exec so the PID is the real claude process, not sh
     const stdoutLogPath = join(runDir, 'stdout.log')
 
@@ -322,13 +326,13 @@ async function callStart(): Promise<void> {
 
     const sessionId = randomUUID()
 
-    // 8. Update lock to claude PID (so lock stays valid after launcher exits)
+    // 9. Update lock to claude PID (so lock stays valid after launcher exits)
     releaseLock(runDir, process.pid)
     if (!acquireLock(runDir, claudePid)) {
       throw new Error('Failed to acquire lock with claude PID')
     }
 
-    // 9. Write status.json
+    // 10. Write status.json
     const status: StatusFile = {
       status: 'running',
       callPid: fifoWriterPid,
@@ -339,7 +343,7 @@ async function callStart(): Promise<void> {
     }
     writeStatus(runDir, status)
 
-    // 10. Send bootstrap message through FIFO with timeout
+    // 11. Send bootstrap message through FIFO with timeout
     const bootstrapMessage = {
       type: 'user',
       message: {
@@ -362,7 +366,7 @@ async function callStart(): Promise<void> {
       throw new Error('Failed to send bootstrap message (timeout or FIFO error)')
     }
 
-    // 11. Print success
+    // 12. Print success
     writeln(`Call session started (PID ${claudePid})`)
   } catch (err) {
     // Clean up on failure - kill any spawned processes
