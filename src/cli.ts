@@ -36,7 +36,7 @@ const VERSION = '0.1.0'
 // ─── Call Session Prompt ─────────────────────────────────────
 
 function buildCallSessionPrompt(projectRoot: string): string {
-  const artifactsDir = join(projectRoot, '.claude', 'call', 'artifacts')
+  const artifactsDir = join(projectRoot, '.exo-call', 'artifacts')
   return `# Call Session
 
 You are **exo**, in voice call mode. User sees their terminal (the "shared screen") while talking.
@@ -325,7 +325,7 @@ async function callStart(): Promise<void> {
   let claudePid: number | null = null
   let fifoWriterPid: number | null = null
 
-  // 4. Initialize workspace (creates .claude/call/ directory)
+  // 4. Initialize workspace (creates .exo-call/ directory)
   initWorkspace(projectRoot)
 
   try {
