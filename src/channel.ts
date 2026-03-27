@@ -22,6 +22,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { existsSync, unlinkSync, appendFileSync, mkdirSync, openSync, writeSync, closeSync, constants } from 'node:fs'
+import { join } from 'node:path'
 
 import { loadConfig, getLogDir } from './config.js'
 import { initVAD } from './voice/vad.js'
@@ -510,7 +511,12 @@ async function voiceLoop(): Promise<void> {
 
       // Wake word filter in dual mode — require "exo" prefix
       // Applied after pause check so "exo pause" still works
-      if (getRunDirFromEnv() && config.wakeWord.enabled) {
+      // Check both config AND runtime signal file (prefix file in run dir enables it)
+      const runDirForPrefix = getRunDirFromEnv()
+      const prefixEnabled = runDirForPrefix
+        ? (config.wakeWord.enabled || existsSync(join(runDirForPrefix, 'prefix')))
+        : config.wakeWord.enabled
+      if (runDirForPrefix && prefixEnabled) {
         const stripped = extractAfterWakeWord(text)
         if (!stripped) {
           log(`filtered (no wake word): "${text}"`)

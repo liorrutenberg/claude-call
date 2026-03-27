@@ -553,6 +553,43 @@ async function callResume(): Promise<void> {
 }
 
 /**
+ * Enable wake word prefix — user must say "exo" before each command.
+ */
+async function callPrefixOn(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('No call session running')
+    return
+  }
+
+  writeFileSync(join(runDir, 'prefix'), `prefix enabled at ${new Date().toISOString()}`)
+  writeln('Wake word prefix enabled — say "exo" before each command')
+}
+
+/**
+ * Disable wake word prefix — all speech is processed directly.
+ */
+async function callPrefixOff(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('No call session running')
+    return
+  }
+
+  const prefixPath = join(runDir, 'prefix')
+  if (existsSync(prefixPath)) {
+    spawnSync('rm', ['-f', prefixPath])
+  }
+  writeln('Wake word prefix disabled — all speech processed directly')
+}
+
+/**
  * Show call session status.
  */
 async function callStatus(): Promise<void> {
@@ -880,16 +917,30 @@ switch (command) {
           process.exit(1)
         })
         break
+      case 'prefix-on':
+        callPrefixOn().catch((err) => {
+          writeln(`\nPrefix enable failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
+      case 'prefix-off':
+        callPrefixOff().catch((err) => {
+          writeln(`\nPrefix disable failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
       default:
         writeln()
         writeln('\x1b[1mclaude-call call\x1b[0m — Manage call sessions')
         writeln()
         writeln('Subcommands:')
-        writeln('  start   Start a voice call session')
-        writeln('  stop    Stop the current call session')
-        writeln('  pause   Pause the call session')
-        writeln('  resume  Resume a paused call session')
-        writeln('  status  Show call session status')
+        writeln('  start       Start a voice call session')
+        writeln('  stop        Stop the current call session')
+        writeln('  pause       Pause the call session')
+        writeln('  resume      Resume a paused call session')
+        writeln('  prefix-on   Enable "exo" wake word prefix')
+        writeln('  prefix-off  Disable wake word prefix')
+        writeln('  status      Show call session status')
         writeln()
         break
     }
