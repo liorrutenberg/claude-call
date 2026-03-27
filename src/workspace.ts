@@ -6,7 +6,7 @@
  * Contents:
  * - session.json   — current call session info (copied from runtime status)
  * - inbox.jsonl    — append-only event log (call → main communication)
- * - artifacts/     — directory for human-readable output files
+ * - events.jsonl   — event pointers from call session (processed by main session watcher)
  */
 
 import {
@@ -14,7 +14,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -51,12 +50,16 @@ function getInboxPath(workspacePath: string): string {
   return join(workspacePath, 'inbox.jsonl')
 }
 
-function getArtifactsDir(workspacePath: string): string {
-  return join(workspacePath, 'artifacts')
-}
-
 function getSessionPath(workspacePath: string): string {
   return join(workspacePath, 'session.json')
+}
+
+/**
+ * Get the events.jsonl path for a project.
+ * This is the event pointer file written by the call session and consumed by the main session watcher.
+ */
+export function getEventsPath(projectRoot: string): string {
+  return join(getWorkspacePath(projectRoot), 'events.jsonl')
 }
 
 // ─── Workspace initialization ───────────────────────────────
@@ -73,7 +76,6 @@ export function initWorkspace(projectRoot: string): string {
 
   // Create directory structure
   mkdirSync(workspacePath, { recursive: true })
-  mkdirSync(getArtifactsDir(workspacePath), { recursive: true })
 
   // Clean stale files from previous sessions
   const inboxPath = getInboxPath(workspacePath)
@@ -86,14 +88,10 @@ export function initWorkspace(projectRoot: string): string {
     rmSync(sessionPath, { force: true })
   }
 
-  // Clean stale artifacts (optional — keep if user wants to preserve history)
-  // For now, we clean them to start fresh each session
-  const artifactsDir = getArtifactsDir(workspacePath)
-  if (existsSync(artifactsDir)) {
-    const files = readdirSync(artifactsDir)
-    for (const file of files) {
-      rmSync(join(artifactsDir, file), { force: true })
-    }
+  // Clean stale events from previous sessions
+  const eventsPath = getEventsPath(projectRoot)
+  if (existsSync(eventsPath)) {
+    rmSync(eventsPath, { force: true })
   }
 
   return workspacePath
@@ -159,30 +157,6 @@ export function readInboxEvents(workspacePath: string, since?: string): InboxEve
   } catch {
     return []
   }
-}
-
-// ─── Artifact operations ────────────────────────────────────
-
-/**
- * Write an artifact file.
- *
- * @param workspacePath - The workspace directory path
- * @param name - The artifact filename (should include extension)
- * @param content - The artifact content
- * @returns The full path to the artifact file
- */
-export function writeArtifact(workspacePath: string, name: string, content: string): string {
-  const artifactsDir = getArtifactsDir(workspacePath)
-  mkdirSync(artifactsDir, { recursive: true })
-
-  const artifactPath = join(artifactsDir, name)
-
-  // Use atomic write (temp + rename) for safety
-  const tempPath = `${artifactPath}.tmp.${process.pid}`
-  writeFileSync(tempPath, content)
-  renameSync(tempPath, artifactPath)
-
-  return artifactPath
 }
 
 // ─── Session info ───────────────────────────────────────────

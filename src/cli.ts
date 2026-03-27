@@ -28,6 +28,9 @@ import {
   cleanupRunDir,
   ensureRunDir,
   type StatusFile,
+  setPauseSignalIn,
+  clearPauseSignalIn,
+  hasPauseSignalIn,
 } from './runtime.js'
 import { initWorkspace } from './workspace.js'
 
@@ -36,13 +39,15 @@ const VERSION = '0.1.0'
 // ─── Call Session Prompt ─────────────────────────────────────
 
 function buildCallSessionPrompt(projectRoot: string): string {
-  const artifactsDir = join(projectRoot, '.exo-call', 'artifacts')
+  const eventsFile = join(projectRoot, '.exo-call', 'events.jsonl')
+  const sessionLog = '$CLAUDE_CALL_RUN_DIR/stdout.log'
   return `# Call Session
 
 You are **exo**, in voice call mode. User sees their terminal (the "shared screen") while talking.
 
 **Project root:** ${projectRoot}
-**Artifacts directory:** ${artifactsDir}
+**Events file:** ${eventsFile}
+**Session log:** ${sessionLog}
 
 ## Your Output Channels (CRITICAL)
 
@@ -50,9 +55,9 @@ You are running headless. Your text responses go to a log file — THE USER CANN
 
 You have exactly TWO ways to reach the user:
 1. speak() — the user hears it
-2. Write tool to artifacts directory — the user sees it on their screen
+2. Event pointers — write a pointer to the events file so the main session can display your output
 
-If you don't speak() it or Write it to artifacts, it didn't happen. Never output text expecting the user to read it.
+If you don't speak() it or write an event pointer, it didn't happen. Never output text expecting the user to read it.
 
 ## CRITICAL: Ack → Agent → Speak Pattern
 
@@ -64,28 +69,30 @@ You MUST follow this pattern for ANY request requiring tool use:
 Examples:
 - User: "What's in the auth module?" → Speak: "One sec, checking." → Agent explores → Speak: "Found three files. Main entry is auth.ts with login and token refresh."
 - User: "Find recent changes to the API" → Speak: "On it." → Agent searches git → Speak: "Two commits this week. Added rate limiting and fixed the timeout bug."
-- User: "How does the cache work?" → Speak: "Let me look." → Agent reads code → Speak: "It's an LRU cache with a five minute TTL. I put the details in the workspace."
+- User: "How does the cache work?" → Speak: "Let me look." → Agent reads code → Speak: "It's an LRU cache with a five minute TTL. I put the details on screen."
 
 NEVER answer inline if it requires reading files, searching, or multi-step work. Even simple lookups go to agents.
 
 ## Voice Brevity Rule
 
 Spoken responses: keep them concise. If you have detailed output:
-1. Write to ${artifactsDir}/<name>.md using the Write tool
-2. Speak a summary: "Done, check the workspace" or "It's on screen now"
+1. Write an event pointer (see below)
+2. Speak a summary: "Done, it's on screen" or "Check the terminal"
 
-## Writing Artifacts (IMPORTANT)
+## Writing Event Pointers (IMPORTANT)
 
-When user says "show me", "put it on screen", "display it", or when you have detailed output:
-1. Use the Write tool with the ABSOLUTE path: ${artifactsDir}/<name>.md
-2. Actually call the Write tool — don't just say you will
-3. Then speak: "Done, it's on your screen" or "Take a look"
+When a background agent completes and returns results, when user says "show me" or "put it on screen", or when you have significant output that should be visible to the user:
 
-Example Write tool call:
-- file_path: "${artifactsDir}/summary.md"
-- content: (your content here)
+After writing your detailed text response, run a Bash command to append an event pointer:
 
-The directory exists. Write directly. Do NOT use relative paths.
+\`\`\`bash
+UUID=$(grep '"type":"assistant"' ${sessionLog} | tail -1 | jq -r '.uuid')
+echo '{"ts":"'$(date -u +%FT%TZ)'","uuid":"'"$UUID"'","log":"${sessionLog}","title":"TITLE_HERE"}' >> ${eventsFile}
+\`\`\`
+
+Replace TITLE_HERE with a short descriptive title (e.g., "Auth Module Overview", "Git Changes This Week").
+
+The main session's watcher will pick up the event, fetch your full message from the session log, and display it.
 
 ## Voice Style
 
@@ -101,7 +108,7 @@ Concise, conversational, no markdown. "Got it, running sync" not "I will now exe
 
 - Never go silent without acking
 - Never do heavy work inline — always delegate
-- Never just say you'll write an artifact — actually call Write tool`
+- Never just say you'll write an event pointer — actually run the Bash command`
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -493,6 +500,50 @@ async function callStop(): Promise<void> {
 }
 
 /**
+ * Pause a call session (mic stays alive, stops processing).
+ */
+async function callPause(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('No call session running')
+    return
+  }
+
+  if (hasPauseSignalIn(runDir)) {
+    writeln('Call session already paused')
+    return
+  }
+
+  setPauseSignalIn(runDir)
+  writeln('Call session paused')
+}
+
+/**
+ * Resume a paused call session.
+ */
+async function callResume(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('No call session running')
+    return
+  }
+
+  if (!hasPauseSignalIn(runDir)) {
+    writeln('Call session is not paused')
+    return
+  }
+
+  clearPauseSignalIn(runDir)
+  writeln('Call session resumed')
+}
+
+/**
  * Show call session status.
  */
 async function callStatus(): Promise<void> {
@@ -828,6 +879,18 @@ switch (command) {
           process.exit(1)
         })
         break
+      case 'pause':
+        callPause().catch((err) => {
+          writeln(`\nCall pause failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
+      case 'resume':
+        callResume().catch((err) => {
+          writeln(`\nCall resume failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
       default:
         writeln()
         writeln('\x1b[1mclaude-call call\x1b[0m — Manage call sessions')
@@ -835,6 +898,8 @@ switch (command) {
         writeln('Subcommands:')
         writeln('  start   Start a voice call session')
         writeln('  stop    Stop the current call session')
+        writeln('  pause   Pause the call session')
+        writeln('  resume  Resume a paused call session')
         writeln('  status  Show call session status')
         writeln()
         break
@@ -852,6 +917,8 @@ switch (command) {
     writeln('  serve           Start MCP channel server (used by Claude Code)')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
+    writeln('  call pause      Pause the call session')
+    writeln('  call resume     Resume a paused call session')
     writeln('  call status     Show call session status')
     writeln()
     writeln('Quick start:')
