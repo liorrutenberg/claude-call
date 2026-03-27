@@ -83,7 +83,7 @@ function defaults(): Config {
       mode: 'quick',
     },
     interrupt: {
-      keywords: ['stop', 'wait', 'hold on', 'pause', 'hey'],
+      keywords: ['stop', 'wait', 'hold on', 'pause', 'hey', 'exo'],
     },
     pronunciation: {
       file: '',
