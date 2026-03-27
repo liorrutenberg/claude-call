@@ -281,12 +281,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === 'speak') {
     const text = (args.text as string) ?? ''
     if (text) {
+      const speakStart = Date.now()
       stopThinkingPulse() // Stop thinking pulse when response begins
       log(`speaking: ${text}`)
 
       const config = loadConfig()
       const interruptKeywords = config.interrupt.keywords
       let interrupted = false
+      let tFirstAudio = 0
       const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
       kwMonitor.onBurst = async (wavPath: string) => {
@@ -315,9 +317,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             log('unmuted (done speaking)')
           },
           onInterruptCheck: async () => interrupted,
+          onFirstAudio: () => {
+            tFirstAudio = Date.now()
+          },
         })
       } finally {
         kwMonitor.stop()
+        const speakFinish = Date.now()
+        if (tFirstAudio) {
+          log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
+        } else {
+          log(`speak: tts_total=${speakFinish - speakStart}ms`)
+        }
       }
     }
     return { content: [{ type: 'text', text: 'spoken' }] }
@@ -462,10 +473,11 @@ async function voiceLoop(): Promise<void> {
 
       log(`transcribing (full): ${wavPath}`)
       let text: string
+      let t2: number, t3: number
       try {
-        const t2 = Date.now()
+        t2 = Date.now()
         text = applySttCorrections(normalizeText(await transcribe(wavPath)))
-        const t3 = Date.now()
+        t3 = Date.now()
         log(`transcription took ${t3 - t2}ms: "${text}"`)
       } catch (err) {
         log(`transcription error: ${(err as Error).message}`)
@@ -511,7 +523,9 @@ async function voiceLoop(): Promise<void> {
 
       try {
         await deliver(text)
+        const tDelivered = Date.now()
         log('delivered')
+        log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
         // Start thinking pulse while waiting for Claude's response
         startThinkingPulse()
       } catch (err) {
