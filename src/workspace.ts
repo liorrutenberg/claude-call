@@ -77,6 +77,18 @@ export function initWorkspace(projectRoot: string): string {
   // Create directory structure
   mkdirSync(workspacePath, { recursive: true })
 
+  // Ensure .claude-call/ is in the project's .gitignore
+  const gitignorePath = join(projectRoot, '.gitignore')
+  try {
+    const existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf-8') : ''
+    if (!existing.includes('.claude-call')) {
+      const entry = `${existing.endsWith('\n') || existing === '' ? '' : '\n'}.claude-call/\n`
+      appendFileSync(gitignorePath, entry)
+    }
+  } catch {
+    // Ignore — gitignore is nice-to-have, not critical
+  }
+
   // Clean stale files from previous sessions
   const inboxPath = getInboxPath(workspacePath)
   if (existsSync(inboxPath)) {

@@ -8,8 +8,9 @@
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, chmodSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { execSync, spawn, spawnSync } from 'node:child_process'
 import { stringify as stringifyYaml } from 'yaml'
@@ -271,38 +272,46 @@ function formatUptime(startedAt: string): string {
 }
 
 /**
- * Create .claude/commands/call-start.md and call-stop.md in the project.
+ * Install skill files to ~/.claude/commands/ and scripts to the app scripts dir.
+ * Called at the end of setup to make /call-start, /call-stop, etc. available globally.
  */
-function writeCommandFiles(projectRoot: string): void {
-  const commandsDir = join(projectRoot, '.claude', 'commands')
-  mkdirSync(commandsDir, { recursive: true })
+function installSkillsAndScripts(): void {
+  // Determine the app root directory.
+  // When running from the installed location (~/.claude-call/app/dist/cli.js),
+  // the app root is one level up from the dist/ directory.
+  const appRoot = resolve(dirname(process.argv[1]), '..')
 
-  const callStart = `Start a voice call session.
+  // 1. Install skill files to ~/.claude/commands/
+  const skillsSrc = join(appRoot, 'skills')
+  const commandsDest = join(homedir(), '.claude', 'commands')
 
-\`\`\`bash
-claude-call call start
-\`\`\`
+  if (existsSync(skillsSrc)) {
+    mkdirSync(commandsDest, { recursive: true })
+    const skillFiles = readdirSync(skillsSrc).filter(f => f.endsWith('.md'))
+    for (const file of skillFiles) {
+      copyFileSync(join(skillsSrc, file), join(commandsDest, file))
+      writeln(`  Installed ${file} → ${join(commandsDest, file)}`)
+    }
+  } else {
+    writeln(`  \x1b[33mSkills directory not found at ${skillsSrc} — skipping skill install\x1b[0m`)
+  }
 
-After the call starts, the voice session will greet you automatically.
-`
+  // 2. Install scripts to ~/.claude-call/app/scripts/
+  const scriptsSrc = join(appRoot, 'scripts')
+  const scriptsDest = join(homedir(), '.claude-call', 'app', 'scripts')
 
-  const callStop = `Stop the voice call session.
-
-\`\`\`bash
-claude-call call stop
-\`\`\`
-
-Respond with "Voice call ended." (text only).
-`
-
-  const startPath = join(commandsDir, 'call-start.md')
-  const stopPath = join(commandsDir, 'call-stop.md')
-
-  writeFileSync(startPath, callStart)
-  writeln(`  Created ${startPath}`)
-
-  writeFileSync(stopPath, callStop)
-  writeln(`  Created ${stopPath}`)
+  if (existsSync(scriptsSrc)) {
+    mkdirSync(scriptsDest, { recursive: true })
+    const scriptFiles = readdirSync(scriptsSrc).filter(f => f.endsWith('.sh'))
+    for (const file of scriptFiles) {
+      const destPath = join(scriptsDest, file)
+      copyFileSync(join(scriptsSrc, file), destPath)
+      chmodSync(destPath, 0o755)
+      writeln(`  Installed ${file} → ${destPath}`)
+    }
+  } else {
+    writeln(`  \x1b[33mScripts directory not found at ${scriptsSrc} — skipping script install\x1b[0m`)
+  }
 }
 
 // ─── Call commands ──────────────────────────────────────────
@@ -681,39 +690,20 @@ async function setup(): Promise<void> {
   }
   writeln()
 
-  // Step 3: Project integration
-  writeln('\x1b[1m3. Project integration...\x1b[0m')
+  // Step 3: Install skills and scripts globally
+  writeln('\x1b[1m3. Installing skills and scripts...\x1b[0m')
   writeln()
-
-  let effectiveProjectRoot: string | null = null
-  const projectRoot = findProjectRoot()
-  if (projectRoot) {
-    writeln(`  Detected project: ${projectRoot}`)
-    writeCommandFiles(projectRoot)
-    effectiveProjectRoot = projectRoot
-  } else {
-    writeln('  No project root detected (no .git or package.json found).')
-    if (await confirm('  Add to current directory?', false)) {
-      const cwd = process.cwd()
-      writeCommandFiles(cwd)
-      effectiveProjectRoot = cwd
-    } else {
-      writeln('  Skipping project integration.')
-    }
-  }
-
-  if (effectiveProjectRoot) {
-    writeln('  Voice server will load only in call sessions (dual-mode)')
-    writeln('  Use /call-start to begin a voice call')
-  }
+  installSkillsAndScripts()
+  writeln()
 
   // Look for pronunciation.yaml in the project directory
   let pronunciationFile: string | undefined
-  if (effectiveProjectRoot) {
+  const projectRoot = findProjectRoot()
+  if (projectRoot) {
     const pronunciationPaths = [
-      join(effectiveProjectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
-      join(effectiveProjectRoot, 'pronunciation.yaml'),
-      join(effectiveProjectRoot, 'config', 'pronunciation.yaml'),
+      join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
+      join(projectRoot, 'pronunciation.yaml'),
+      join(projectRoot, 'config', 'pronunciation.yaml'),
     ]
     for (const p of pronunciationPaths) {
       if (existsSync(p)) {
@@ -723,7 +713,6 @@ async function setup(): Promise<void> {
       }
     }
   }
-  writeln()
 
   // Step 4: Write global config
   writeln('\x1b[1m4. Writing configuration...\x1b[0m')
@@ -748,7 +737,7 @@ async function setup(): Promise<void> {
   // Step 5: Done
   writeln('\x1b[1m5. Setup complete!\x1b[0m')
   writeln()
-  writeln('  Start a voice call from Claude Code:')
+  writeln('  Start a voice call from any Claude Code session:')
   writeln()
   writeln('    \x1b[1m/call-start\x1b[0m')
   writeln()
@@ -756,7 +745,7 @@ async function setup(): Promise<void> {
   writeln()
   writeln('  Your main terminal stays free for typing.')
   writeln()
-  writeln('  \x1b[2mTo add voice to another project, run "claude-call setup" from that directory.\x1b[0m')
+  writeln('  Skills installed globally to ~/.claude/commands/ — available in all projects.')
   writeln()
 }
 
