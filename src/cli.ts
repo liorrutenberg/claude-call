@@ -11,11 +11,24 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import { execSync, spawn } from 'node:child_process'
+import { execSync, spawn, spawnSync } from 'node:child_process'
 import { stringify as stringifyYaml } from 'yaml'
+import { randomUUID } from 'node:crypto'
 import { loadConfig, getModelsDir } from './config.js'
 import { checkDeps, formatDepsReport, installMissing } from './setup/deps.js'
 import { MODELS, downloadWithProgress, isModelDownloaded } from './setup/models.js'
+import {
+  getRunDir,
+  getFifoPath,
+  acquireLock,
+  releaseLock,
+  getLockHolder,
+  writeStatus,
+  readStatus,
+  cleanupRunDir,
+  ensureRunDir,
+  type StatusFile,
+} from './runtime.js'
 
 const VERSION = '0.1.0'
 
@@ -102,6 +115,82 @@ function findProjectRoot(): string | null {
 }
 
 /**
+ * Check if a process is alive.
+ */
+function isProcessAlive(pid: number): boolean {
+  if (pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EPERM') {
+      return true
+    }
+    return false
+  }
+}
+
+/**
+ * Create FIFO using mkfifo command.
+ */
+function createFifo(path: string): boolean {
+  try {
+    const result = spawnSync('mkfifo', [path])
+    return result.status === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Generate per-run MCP config by copying all servers from project's .mcp.json.
+ * Ensures the call session has access to all tools (voice, memory, traces, etc).
+ */
+function generateMcpConfig(runDir: string, projectRoot: string): string {
+  const configPath = join(runDir, 'mcp.json')
+  const projectMcpPath = join(projectRoot, '.mcp.json')
+
+  let mcpConfig: { mcpServers: Record<string, unknown> } = {
+    mcpServers: {
+      voice: {
+        command: 'claude-call',
+        args: ['serve'],
+      },
+    },
+  }
+
+  // Copy all MCP servers from project config if it exists
+  if (existsSync(projectMcpPath)) {
+    try {
+      const projectConfig = JSON.parse(readFileSync(projectMcpPath, 'utf-8')) as { mcpServers?: Record<string, unknown> }
+      if (projectConfig.mcpServers) {
+        mcpConfig.mcpServers = { ...projectConfig.mcpServers }
+      }
+    } catch {
+      // Fall back to just voice if project config is invalid
+    }
+  }
+
+  writeFileSync(configPath, JSON.stringify(mcpConfig, null, 2))
+  return configPath
+}
+
+/**
+ * Format uptime from startedAt timestamp.
+ */
+function formatUptime(startedAt: string): string {
+  const start = new Date(startedAt).getTime()
+  const now = Date.now()
+  const seconds = Math.floor((now - start) / 1000)
+
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  const hours = Math.floor(seconds / 3600)
+  const mins = Math.floor((seconds % 3600) / 60)
+  return `${hours}h ${mins}m`
+}
+
+/**
  * Add voice server entry to a project's .mcp.json.
  * Creates the file if it doesn't exist, merges if it does.
  */
@@ -135,22 +224,22 @@ function writeCommandFiles(projectRoot: string): void {
   const commandsDir = join(projectRoot, '.claude', 'commands')
   mkdirSync(commandsDir, { recursive: true })
 
-  const callStart = `Resume the voice channel by removing the pause file, then confirm voice is active.
+  const callStart = `Start a voice call session.
 
 \`\`\`bash
-rm -f /tmp/claude-call-pause
+claude-call call start
 \`\`\`
 
-Say "Call mode. I'm here — what's on your mind?" using the speak tool.
+After the call starts, the voice session will greet you automatically.
 `
 
-  const callStop = `Pause the voice channel by creating the pause file, then confirm voice is paused.
+  const callStop = `Stop the voice call session.
 
 \`\`\`bash
-touch /tmp/claude-call-pause
+claude-call call stop
 \`\`\`
 
-Respond with "Voice paused." (text only, don't use speak tool since we just muted).
+Respond with "Voice call ended." (text only).
 `
 
   const startPath = join(commandsDir, 'call-start.md')
@@ -161,6 +250,234 @@ Respond with "Voice paused." (text only, don't use speak tool since we just mute
 
   writeFileSync(stopPath, callStop)
   writeln(`  Created ${stopPath}`)
+}
+
+// ─── Call commands ──────────────────────────────────────────
+
+/**
+ * Start a call session.
+ */
+async function callStart(): Promise<void> {
+  // 1. Determine project root
+  const projectRoot = findProjectRoot() ?? process.cwd()
+
+  // 2. Get run dir and ensure it exists
+  const runDir = getRunDir(projectRoot)
+  ensureRunDir(runDir)
+
+  // 3. Acquire lock early with launcher PID (prevents race conditions)
+  const lockHolder = getLockHolder(runDir)
+  if (lockHolder !== null) {
+    writeln(`Call session already running (PID ${lockHolder})`)
+    process.exit(1)
+  }
+  if (!acquireLock(runDir, process.pid)) {
+    writeln('Failed to acquire lock')
+    process.exit(1)
+  }
+
+  let claudePid: number | null = null
+  let fifoWriterPid: number | null = null
+
+  try {
+    // 4. Create FIFO
+    const fifoPath = getFifoPath(runDir)
+    if (existsSync(fifoPath)) {
+      spawnSync('rm', ['-f', fifoPath])
+    }
+    if (!createFifo(fifoPath)) {
+      throw new Error(`Failed to create FIFO at ${fifoPath}`)
+    }
+
+    // 5. Generate per-run MCP config (copies all servers from project config)
+    const mcpConfigPath = generateMcpConfig(runDir, projectRoot)
+
+    // 6. Start persistent FIFO writer to keep FIFO open
+    // Use exec so the PID is the real sleep process, not sh
+    const fifoWriter = spawn('sh', ['-c', `exec sleep 999999 > "${fifoPath}"`], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    fifoWriter.unref()
+    fifoWriterPid = fifoWriter.pid!
+
+    // 7. Spawn headless claude with FIFO as stdin via shell redirection
+    // Use exec so the PID is the real claude process, not sh
+    const stdoutLogPath = join(runDir, 'stdout.log')
+
+    const claudeProc = spawn('sh', ['-c',
+      `exec claude -p --input-format stream-json --output-format stream-json --verbose ` +
+      `--mcp-config "${mcpConfigPath}" --dangerously-skip-permissions ` +
+      `< "${fifoPath}" >> "${stdoutLogPath}" 2>&1`
+    ], {
+      detached: true,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        CLAUDE_CALL_RUN_DIR: runDir,
+      },
+    })
+    claudeProc.unref()
+    claudePid = claudeProc.pid!
+
+    const sessionId = randomUUID()
+
+    // 8. Update lock to claude PID (so lock stays valid after launcher exits)
+    releaseLock(runDir, process.pid)
+    if (!acquireLock(runDir, claudePid)) {
+      throw new Error('Failed to acquire lock with claude PID')
+    }
+
+    // 9. Write status.json
+    const status: StatusFile = {
+      status: 'running',
+      callPid: fifoWriterPid,
+      claudePid,
+      startedAt: new Date().toISOString(),
+      projectRoot,
+      sessionId,
+    }
+    writeStatus(runDir, status)
+
+    // 10. Send bootstrap message through FIFO with timeout
+    const bootstrapMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'You are in voice call mode. You are exo. Listen for voice messages. Always respond using the speak tool. Keep answers conversational and concise. Say hello to confirm you are ready.',
+          },
+        ],
+      },
+    }
+
+    // Use spawnSync with timeout to avoid blocking forever if claude fails to start
+    const escapedMessage = JSON.stringify(bootstrapMessage).replace(/'/g, "'\\''")
+    const result = spawnSync('sh', ['-c', `echo '${escapedMessage}' > "${fifoPath}"`], {
+      timeout: 10000,
+    })
+    if (result.status !== 0) {
+      throw new Error('Failed to send bootstrap message (timeout or FIFO error)')
+    }
+
+    // 11. Print success
+    writeln(`Call session started (PID ${claudePid})`)
+  } catch (err) {
+    // Clean up on failure - kill any spawned processes
+    if (claudePid && isProcessAlive(claudePid)) {
+      try { process.kill(claudePid, 'SIGKILL') } catch { /* ignore */ }
+    }
+    if (fifoWriterPid && isProcessAlive(fifoWriterPid)) {
+      try { process.kill(fifoWriterPid, 'SIGKILL') } catch { /* ignore */ }
+    }
+    // Release lock (try both PIDs in case we're in a transitional state)
+    releaseLock(runDir, process.pid)
+    if (claudePid) releaseLock(runDir, claudePid)
+    cleanupRunDir(runDir)
+    throw err
+  }
+}
+
+/**
+ * Wait for a process to exit, with timeout and force kill.
+ */
+function waitForProcessExit(pid: number, timeoutMs: number): void {
+  if (!isProcessAlive(pid)) return
+
+  // Send SIGTERM
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return // Process already gone
+  }
+
+  // Wait for exit with polling
+  const pollInterval = 100
+  const maxAttempts = Math.ceil(timeoutMs / pollInterval)
+  for (let i = 0; i < maxAttempts; i++) {
+    if (!isProcessAlive(pid)) return
+    spawnSync('sleep', ['0.1'])
+  }
+
+  // Force kill if still alive
+  if (isProcessAlive(pid)) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
+ * Stop a call session.
+ */
+async function callStop(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  // 1. Read status
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('No call session running')
+    return
+  }
+
+  // 2. Kill claude process and FIFO writer, waiting for exit
+  waitForProcessExit(status.claudePid, 5000)
+  waitForProcessExit(status.callPid, 2000)
+
+  // 3. Release lock (using the PID that holds it)
+  const lockHolder = getLockHolder(runDir)
+  if (lockHolder !== null) {
+    releaseLock(runDir, lockHolder)
+  }
+
+  // 4. Clean up run dir
+  cleanupRunDir(runDir)
+
+  // 5. Print status
+  writeln('Call session stopped')
+}
+
+/**
+ * Show call session status.
+ */
+async function callStatus(): Promise<void> {
+  const projectRoot = findProjectRoot() ?? process.cwd()
+  const runDir = getRunDir(projectRoot)
+
+  // 1. Read status
+  const status = readStatus(runDir)
+  if (!status) {
+    writeln('Status: stopped')
+    writeln('No active call session')
+    return
+  }
+
+  // 2. Check if processes are alive
+  const claudeAlive = isProcessAlive(status.claudePid)
+  const writerAlive = isProcessAlive(status.callPid)
+
+  // 3. Determine actual status
+  let actualStatus: string
+  if (claudeAlive && writerAlive) {
+    actualStatus = 'running'
+  } else if (!claudeAlive && !writerAlive) {
+    actualStatus = 'crashed'
+  } else {
+    actualStatus = 'crashed (partial)'
+  }
+
+  // 4. Print status
+  writeln(`Status: ${actualStatus}`)
+  writeln(`Claude PID: ${status.claudePid}${claudeAlive ? '' : ' (dead)'}`)
+  writeln(`Writer PID: ${status.callPid}${writerAlive ? '' : ' (dead)'}`)
+  writeln(`Uptime: ${formatUptime(status.startedAt)}`)
+  writeln(`Project: ${status.projectRoot}`)
+  writeln(`Session: ${status.sessionId}`)
 }
 
 // ─── Setup command ──────────────────────────────────────────
@@ -412,6 +729,7 @@ async function serve(): Promise<void> {
 // ─── Main ───────────────────────────────────────────────────
 
 const command = process.argv[2]
+const subcommand = process.argv[3]
 
 switch (command) {
   case 'setup':
@@ -435,15 +753,51 @@ switch (command) {
     })
     break
 
+  case 'call':
+    switch (subcommand) {
+      case 'start':
+        callStart().catch((err) => {
+          writeln(`\nCall start failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
+      case 'stop':
+        callStop().catch((err) => {
+          writeln(`\nCall stop failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
+      case 'status':
+        callStatus().catch((err) => {
+          writeln(`\nCall status failed: ${(err as Error).message}`)
+          process.exit(1)
+        })
+        break
+      default:
+        writeln()
+        writeln('\x1b[1mclaude-call call\x1b[0m — Manage call sessions')
+        writeln()
+        writeln('Subcommands:')
+        writeln('  start   Start a voice call session')
+        writeln('  stop    Stop the current call session')
+        writeln('  status  Show call session status')
+        writeln()
+        break
+    }
+    break
+
   default:
     writeln()
     writeln(`\x1b[1mclaude-call\x1b[0m v${VERSION}`)
     writeln('Continuous two-way voice conversations for Claude Code')
     writeln()
     writeln('Commands:')
-    writeln('  setup   Interactive first-run setup')
-    writeln('  check   Verify dependencies and models')
-    writeln('  serve   Start MCP channel server (used by Claude Code)')
+    writeln('  setup        Interactive first-run setup')
+    writeln('  check        Verify dependencies and models')
+    writeln('  serve        Start MCP channel server (used by Claude Code)')
+    writeln('  call start   Start a voice call session')
+    writeln('  call stop    Stop the current call session')
+    writeln('  call status  Show call session status')
     writeln()
     writeln('Quick start:')
     writeln('  npx claude-call setup')
