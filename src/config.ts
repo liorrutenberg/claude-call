@@ -40,6 +40,11 @@ export interface PronunciationConfig {
   file: string
 }
 
+export interface FeedbackConfig {
+  enabled: boolean
+  volume: number
+}
+
 export interface WakeWordConfig {
   enabled: boolean
 }
@@ -51,6 +56,7 @@ export interface Config {
   silence: SilenceConfig
   interrupt: InterruptConfig
   pronunciation: PronunciationConfig
+  feedback: FeedbackConfig
   wakeWord: WakeWordConfig
 }
 
@@ -82,6 +88,10 @@ function defaults(): Config {
     pronunciation: {
       file: '',
     },
+    feedback: {
+      enabled: true,
+      volume: 0.3,
+    },
     wakeWord: {
       enabled: true,
     },
@@ -97,6 +107,7 @@ interface YamlConfig {
   silence?: Partial<SilenceConfig>
   interrupt?: Partial<InterruptConfig>
   pronunciation?: Partial<PronunciationConfig>
+  feedback?: Partial<FeedbackConfig>
   wakeWord?: Partial<WakeWordConfig>
 }
 
@@ -173,6 +184,7 @@ function merge(base: Config, yaml: YamlConfig): Config {
       keywords: yaml.interrupt?.keywords ?? base.interrupt.keywords,
     },
     pronunciation: { ...base.pronunciation, ...yaml.pronunciation },
+    feedback: { ...base.feedback, ...yaml.feedback },
     wakeWord: { ...base.wakeWord, ...yaml.wakeWord },
   }
 }

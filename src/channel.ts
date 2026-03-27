@@ -34,6 +34,12 @@ import {
   startKeywordMonitor,
   killOwnedChildren,
 } from './voice/recorder.js'
+import {
+  playStartChime,
+  playPauseChime,
+  startThinkingPulse,
+  stopThinkingPulse,
+} from './voice/feedback.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
 import { getRunDirFromEnv, getFifoPath, updateStatus } from './runtime.js'
@@ -275,6 +281,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === 'speak') {
     const text = (args.text as string) ?? ''
     if (text) {
+      stopThinkingPulse() // Stop thinking pulse when response begins
       log(`speaking: ${text}`)
 
       const config = loadConfig()
@@ -381,6 +388,9 @@ async function voiceLoop(): Promise<void> {
   log(`config: silence=${config.silence.mode}, tts=${config.tts.engine}, rate=${config.tts.rate}`)
   log('starting voice loop')
 
+  // Play start chime when voice loop begins
+  playStartChime()
+
   while (true) {
     if (sessionDead) {
       log('session dead, exiting voice loop')
@@ -401,6 +411,7 @@ async function voiceLoop(): Promise<void> {
       if (softPaused) {
         await waitForUnpause()
         if (softPaused) continue // hard pause or other exit
+        playStartChime()
         log('voice loop resumed from soft pause')
         await deliver('[Voice resumed]')
         continue
@@ -485,6 +496,7 @@ async function voiceLoop(): Promise<void> {
       // Must check BEFORE wake word stripping so "exo pause" matches
       if (matchesPause(text)) {
         softPaused = true
+        playPauseChime()
         log(`soft pause triggered: "${text}"`)
         try {
           await deliver('[Voice paused — say "exo start" to resume]')
@@ -508,6 +520,8 @@ async function voiceLoop(): Promise<void> {
       try {
         await deliver(text)
         log('delivered')
+        // Start thinking pulse while waiting for Claude's response
+        startThinkingPulse()
       } catch (err) {
         log(`deliver error: ${(err as Error).message}`)
       }
