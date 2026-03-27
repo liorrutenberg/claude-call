@@ -514,7 +514,8 @@ async function voiceLoop(): Promise<void> {
       // Check both config AND runtime signal file (prefix file in run dir enables it)
       const runDirForPrefix = getRunDirFromEnv()
       const prefixEnabled = runDirForPrefix
-        ? (config.wakeWord.enabled || existsSync(join(runDirForPrefix, 'prefix')))
+        ? (existsSync(join(runDirForPrefix, 'prefix')) ||
+           (config.wakeWord.enabled && !existsSync(join(runDirForPrefix, 'no-prefix'))))
         : config.wakeWord.enabled
       if (runDirForPrefix && prefixEnabled) {
         const stripped = extractAfterWakeWord(text)

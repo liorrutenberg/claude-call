@@ -8,7 +8,7 @@
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, chmodSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, chmodSync, realpathSync, rmSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
@@ -39,9 +39,9 @@ const VERSION = '0.1.0'
 
 // ─── Call Session Prompt ─────────────────────────────────────
 
-function buildCallSessionPrompt(projectRoot: string): string {
+function buildCallSessionPrompt(projectRoot: string, runDir: string): string {
   const eventsFile = join(projectRoot, '.claude-call', 'events.jsonl')
-  const sessionLog = '$CLAUDE_CALL_RUN_DIR/stdout.log'
+  const sessionLog = join(runDir, 'stdout.log')
   return `# Call Session
 
 You are **exo**, in voice call mode. User sees their terminal (the "shared screen") while talking.
@@ -87,8 +87,8 @@ When a background agent completes and returns results, when user says "show me" 
 After writing your detailed text response, run a Bash command to append an event pointer:
 
 \`\`\`bash
-UUID=$(grep '"type":"assistant"' ${sessionLog} | tail -1 | jq -r '.uuid')
-echo '{"ts":"'$(date -u +%FT%TZ)'","uuid":"'"$UUID"'","log":"${sessionLog}","title":"TITLE_HERE"}' >> ${eventsFile}
+UUID=$(grep '"type":"assistant"' '${sessionLog}' | tail -1 | jq -r '.uuid')
+echo '{"ts":"'$(date -u +%FT%TZ)'","uuid":"'"$UUID"'","log":"${sessionLog}","title":"TITLE_HERE"}' >> '${eventsFile}'
 \`\`\`
 
 Replace TITLE_HERE with a short descriptive title (e.g., "Auth Module Overview", "Git Changes This Week").
@@ -279,7 +279,8 @@ function installSkillsAndScripts(): void {
   // Determine the app root directory.
   // When running from the installed location (~/.claude-call/app/dist/cli.js),
   // the app root is one level up from the dist/ directory.
-  const appRoot = resolve(dirname(process.argv[1]), '..')
+  // Use realpathSync to resolve symlinks (e.g., /usr/local/bin/claude-call → ~/.claude-call/app/dist/cli.js)
+  const appRoot = resolve(dirname(realpathSync(process.argv[1])), '..')
 
   // 1. Install skill files to ~/.claude/commands/
   const skillsSrc = join(appRoot, 'skills')
@@ -412,7 +413,7 @@ async function callStart(): Promise<void> {
         content: [
           {
             type: 'text',
-            text: `${buildCallSessionPrompt(projectRoot)}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
+            text: `${buildCallSessionPrompt(projectRoot, runDir)}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
           },
         ],
       },
@@ -566,6 +567,9 @@ async function callPrefixOn(): Promise<void> {
   }
 
   writeFileSync(join(runDir, 'prefix'), `prefix enabled at ${new Date().toISOString()}`)
+  // Remove no-prefix override if it exists
+  const noPrefixPath = join(runDir, 'no-prefix')
+  if (existsSync(noPrefixPath)) rmSync(noPrefixPath)
   writeln('Wake word prefix enabled — say "exo" before each command')
 }
 
@@ -582,10 +586,11 @@ async function callPrefixOff(): Promise<void> {
     return
   }
 
+  // Create no-prefix file to override config.wakeWord.enabled
+  writeFileSync(join(runDir, 'no-prefix'), `disabled at ${new Date().toISOString()}`)
+  // Also remove the prefix file if it exists
   const prefixPath = join(runDir, 'prefix')
-  if (existsSync(prefixPath)) {
-    spawnSync('rm', ['-f', prefixPath])
-  }
+  if (existsSync(prefixPath)) rmSync(prefixPath)
   writeln('Wake word prefix disabled — all speech processed directly')
 }
 

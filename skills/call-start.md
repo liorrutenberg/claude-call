@@ -14,7 +14,7 @@ The agent should run this bash loop:
 
 ```bash
 PROJECT_ROOT="$(pwd)"
-SCRIPT="$(dirname "$(readlink -f "$(which claude-call)")")/../scripts/process-events.sh"
+SCRIPT="$HOME/.claude-call/app/scripts/process-events.sh"
 while claude-call call status 2>&1 | grep -q "running"; do
   OUTPUT=$("$SCRIPT" "$PROJECT_ROOT" 2>/dev/null)
   if [ -n "$OUTPUT" ]; then

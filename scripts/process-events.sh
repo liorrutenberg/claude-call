@@ -50,14 +50,16 @@ TITLE=$(echo "$FIRST_LINE" | jq -r '.title // "Call Session Output"')
 
 if [[ -z "$UUID" || -z "$LOG" ]]; then
   # Malformed event — remove it and exit
-  sed -i '' '1d' "$EVENTS_FILE" 2>/dev/null || tail -n +2 "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  { tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
+  mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
   exit 0
 fi
 
 # Check session log exists
 if [[ ! -f "$LOG" ]]; then
   # Log file missing — remove event and exit
-  sed -i '' '1d' "$EVENTS_FILE" 2>/dev/null || tail -n +2 "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  { tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
+  mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
   exit 0
 fi
 
@@ -67,7 +69,8 @@ MESSAGE_LINE=$(grep "\"$UUID\"" "$LOG" | head -1)
 
 if [[ -z "$MESSAGE_LINE" ]]; then
   # UUID not found in log — remove event and exit
-  sed -i '' '1d' "$EVENTS_FILE" 2>/dev/null || tail -n +2 "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  { tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
+  mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
   exit 0
 fi
 
@@ -81,7 +84,8 @@ CONTENT=$(echo "$MESSAGE_LINE" | jq -r '
 
 if [[ -z "$CONTENT" ]]; then
   # No text content found — remove event and exit
-  sed -i '' '1d' "$EVENTS_FILE" 2>/dev/null || tail -n +2 "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+  { tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
+  mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
   exit 0
 fi
 
@@ -91,7 +95,9 @@ echo ""
 echo "$CONTENT"
 
 # Remove the processed event (first line) from events.jsonl
-# Use portable approach: write remaining lines to temp file, then replace
-tail -n +2 "$EVENTS_FILE" > "$EVENTS_FILE.tmp" && mv "$EVENTS_FILE.tmp" "$EVENTS_FILE"
+# NOTE: Tiny race window — producer appends via >> while we read+mv. The mv is
+# close to atomic so the window is small, acceptable for a POC.
+{ tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
+mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
 
 exit 0

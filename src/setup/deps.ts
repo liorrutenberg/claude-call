@@ -90,6 +90,17 @@ export function checkDeps(): DepResult[] {
     installHint: 'pip install edge-tts',
   })
 
+  // jq — JSON processor (used by process-events.sh)
+  const jqPath = findBinary(['jq'], ['/opt/homebrew/bin/jq', '/usr/local/bin/jq'])
+  results.push({
+    name: 'jq',
+    description: 'JSON processor (event processing)',
+    required: true,
+    found: !!jqPath,
+    path: jqPath ?? undefined,
+    installHint: 'brew install jq',
+  })
+
   // afplay — macOS audio player (should always be present)
   const afplayPath = findBinary(['afplay'])
   results.push({
