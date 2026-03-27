@@ -93,7 +93,7 @@ function defaults(): Config {
       volume: 0.3,
     },
     wakeWord: {
-      enabled: true,
+      enabled: false,
     },
   }
 }

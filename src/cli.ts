@@ -390,9 +390,10 @@ async function callStart(): Promise<void> {
       },
     }
 
-    // Use spawnSync with timeout to avoid blocking forever if claude fails to start
-    const escapedMessage = JSON.stringify(bootstrapMessage).replace(/'/g, "'\\''")
-    const result = spawnSync('sh', ['-c', `echo '${escapedMessage}' > "${fifoPath}"`], {
+    // Use spawnSync with stdin pipe to avoid shell escaping issues with long prompts
+    const bootstrapJson = JSON.stringify(bootstrapMessage) + '\n'
+    const result = spawnSync('sh', ['-c', `cat > "${fifoPath}"`], {
+      input: bootstrapJson,
       timeout: 10000,
     })
     if (result.status !== 0) {
