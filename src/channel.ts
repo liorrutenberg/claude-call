@@ -22,7 +22,6 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { existsSync, unlinkSync, appendFileSync, mkdirSync, openSync, writeSync, closeSync, constants } from 'node:fs'
-import { execSync } from 'node:child_process'
 
 import { loadConfig, getLogDir } from './config.js'
 import { initVAD } from './voice/vad.js'
@@ -33,10 +32,11 @@ import {
   isPaused,
   triggerStop,
   startKeywordMonitor,
+  killOwnedChildren,
 } from './voice/recorder.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
-import { getRunDirFromEnv, getFifoPath } from './runtime.js'
+import { getRunDirFromEnv, getFifoPath, updateStatus } from './runtime.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -159,6 +159,7 @@ async function waitForUnpause(): Promise<void> {
 let muted = false
 let softPaused = false
 let voiceLoopRunning = false
+let sessionDead = false
 
 // ─── FIFO state (call mode) ─────────────────────────────────
 
@@ -212,7 +213,14 @@ function writeFifo(data: string): boolean {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'EPIPE') {
-      log('FIFO broken pipe — reader gone')
+      log('FIFO broken pipe — Claude session has exited')
+      sessionDead = true
+      // Update status to crashed so CLI can detect
+      const runDir = getRunDirFromEnv()
+      if (runDir) {
+        updateStatus(runDir, { status: 'crashed' })
+        log('status updated to crashed')
+      }
     } else if (code === 'EAGAIN') {
       log('FIFO would block')
     } else {
@@ -374,6 +382,11 @@ async function voiceLoop(): Promise<void> {
   log('starting voice loop')
 
   while (true) {
+    if (sessionDead) {
+      log('session dead, exiting voice loop')
+      return
+    }
+
     try {
       if (muted) {
         await new Promise(r => setTimeout(r, 100))
@@ -505,22 +518,15 @@ async function voiceLoop(): Promise<void> {
   }
 }
 
-// ─── Cleanup stale processes ────────────────────────────────
+// ─── Cleanup owned children ─────────────────────────────────
 
-function killStaleRecProcesses(): void {
-  try {
-    const myPid = process.pid
-    const out = execSync('pgrep -lf "rec -r"', { timeout: 3000 }).toString()
-    const pids = out.split('\n')
-      .map(line => parseInt(line.trim(), 10))
-      .filter(pid => !isNaN(pid) && pid !== myPid)
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
-    }
-    if (pids.length > 0) {
-      log(`killed ${pids.length} stale rec process(es): ${pids.join(', ')}`)
-    }
-  } catch { /* no matching processes */ }
+let cleanedUp = false
+
+function cleanupOnExit(): void {
+  if (cleanedUp) return
+  cleanedUp = true
+  killOwnedChildren()
+  closeFifo()
 }
 
 // ─── Main ───────────────────────────────────────────────────
@@ -534,7 +540,22 @@ async function main(): Promise<void> {
   }
   mainStarted = true
 
-  killStaleRecProcesses()
+  // Clean shutdown handlers
+  process.on('SIGTERM', () => {
+    log('received SIGTERM — cleaning up')
+    cleanupOnExit()
+    process.exit(0)
+  })
+
+  process.on('SIGINT', () => {
+    log('received SIGINT — cleaning up')
+    cleanupOnExit()
+    process.exit(0)
+  })
+
+  process.on('exit', () => {
+    cleanupOnExit()
+  })
 
   await mcp.connect(new StdioServerTransport())
   log('connected to Claude Code')

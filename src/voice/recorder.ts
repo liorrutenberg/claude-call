@@ -121,6 +121,28 @@ function createWavBuffer(pcmData: Uint8Array): Uint8Array {
   return wav
 }
 
+// ─── Child process tracking ─────────────────────────────────
+// Track spawned child PIDs for targeted cleanup (avoid killing unrelated rec processes)
+
+const childPids: Set<number> = new Set()
+
+export function registerChildPid(pid: number): void {
+  childPids.add(pid)
+}
+
+export function unregisterChildPid(pid: number): void {
+  childPids.delete(pid)
+}
+
+export function killOwnedChildren(): void {
+  for (const pid of childPids) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch { /* already dead */ }
+  }
+  childPids.clear()
+}
+
 // ─── Stop / pause signals ───────────────────────────────────
 // Now delegated to src/runtime.ts for per-run isolation.
 // Uses CLAUDE_CALL_RUN_DIR env var when set, falls back to global /tmp/ paths.
@@ -183,10 +205,13 @@ export async function startKeywordMonitor(
     '-t', 'raw', '-q', '-',
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
 
+  if (rec.pid) registerChildPid(rec.pid)
+
   const monitor: KeywordMonitor = {
     onBurst: null,
     stop() {
       stopped = true
+      if (rec.pid) unregisterChildPid(rec.pid)
       try { rec.kill('SIGTERM') } catch { /* ignore */ }
     },
   }
@@ -357,6 +382,7 @@ export async function recordUtterance(
       clearTimeout(timer)
 
       if (recorder && !recorder.killed) {
+        if (recorder.pid) unregisterChildPid(recorder.pid)
         try { recorder.kill('SIGTERM') } catch { /* ignore */ }
         recorder = null
       }
@@ -396,6 +422,8 @@ export async function recordUtterance(
         '-q',
         '-',
       ], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      if (recorder.pid) registerChildPid(recorder.pid)
 
       recorder.stderr?.on('data', () => {}) // drain stderr
 
