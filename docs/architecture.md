@@ -147,3 +147,50 @@ Junk filter (removes hallucinations like "thank you")
     ↓
 MCP channel notification → Claude Code session
 ```
+
+## Dual-Session Mode
+
+claude-call uses a dual-session architecture to keep voice isolated from the main terminal:
+
+```
+┌─────────────────────────────────┐
+│  MAIN SESSION (interactive)     │
+│  No voice MCP loaded            │
+│  /call-start → spawns call      │
+│  /call-stop  → kills call       │
+│  Terminal stays free for typing │
+└────────────┬────────────────────┘
+             │
+┌────────────┴────────────────────┐
+│  CALL SESSION (headless)        │
+│  claude -p + stream-json + FIFO │
+│  Voice MCP (sole mic owner)     │
+│  Processes speech continuously  │
+└─────────────────────────────────┘
+```
+
+### Why Two Sessions?
+
+In single-session mode, voice processing blocks the terminal. Background noise queues as messages. You can't type while voice is being handled.
+
+Dual-session mode solves this:
+- **Main session**: Pure text. `/call-start` spawns the voice session, `/call-stop` kills it.
+- **Call session**: Headless `claude -p` process that owns the mic via voice MCP. Converses via speak tool.
+
+### Voice Isolation
+
+The voice MCP server is never loaded in the main session. Instead:
+1. `claude-call setup` installs deps, downloads models, creates `/call-start` and `/call-stop` commands
+2. `/call-start` runs `claude-call call start`, which spawns a headless claude with a per-run MCP config
+3. The per-run MCP config includes only the voice server
+4. The main session's `.mcp.json` does not include voice
+
+This prevents accidental voice activation in the main terminal and eliminates resource contention between sessions.
+
+### Legacy Mode
+
+For single-session mode (voice in the main terminal):
+```bash
+claude-call setup --legacy
+```
+This adds the voice server to the project's `.mcp.json` and requires launching with `--dangerously-load-development-channels server:voice`.

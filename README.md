@@ -63,17 +63,34 @@ Run from your project directory:
 claude-call setup
 ```
 
-Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
+Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, and creates `/call-start` and `/call-stop` slash commands.
 
-Then launch Claude Code with voice enabled:
+### Start a Voice Call
 
-```bash
-claude --dangerously-load-development-channels server:voice
+From Claude Code:
+
+```
+/call-start
 ```
 
-Say `/call-start` and start talking.
+This spawns a separate voice session. Your main terminal stays free for typing.
 
-> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the MCP config and slash commands to whichever project you run it from.
+Stop the call with:
+
+```
+/call-stop
+```
+
+> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the slash commands to whichever project you run it from.
+
+### Legacy Mode (Single Session)
+
+If you prefer the original single-session mode where voice runs in your main session:
+
+```bash
+claude-call setup --legacy
+claude --dangerously-load-development-channels server:voice
+```
 
 ## Voice Commands
 
