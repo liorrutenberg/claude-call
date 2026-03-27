@@ -78,22 +78,26 @@ function isMeaningful(text: string): boolean {
 
 // ─── Soft pause ─────────────────────────────────────────────
 
-const PAUSE_PHRASES = ['exo pause', 'echo pause', 'exo paws', 'echo paws']
-const UNPAUSE_PHRASES = ['exo start', 'echo start', 'exo resume', 'echo resume', 'exo unpause', 'echo unpause']
+const PAUSE_PHRASES = ['exo pause', 'echo pause', 'exo paws', 'echo paws', 'exel pause', 'exo pulse', 'exopause', 'echopause', 'extra pause']
+const UNPAUSE_PHRASES = ['exo start', 'echo start', 'exo resume', 'echo resume', 'exo unpause', 'echo unpause', 'exhale start', 'exhaust start', 'exo go', 'echo go', 'exostart', 'echostart']
+
+function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/[-,.:;!?]/g, ' ').replace(/\s+/g, ' ').trim()
+}
 
 function matchesPause(text: string): boolean {
-  const t = text.toLowerCase()
+  const t = normalizeForMatch(text)
   return PAUSE_PHRASES.some(p => t.includes(p))
 }
 
 function matchesUnpause(text: string): boolean {
-  const t = text.toLowerCase()
+  const t = normalizeForMatch(text)
   return UNPAUSE_PHRASES.some(p => t.includes(p))
 }
 
 /**
  * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
- * Resolves when "unpause" / "call unpause" / "resume" is detected.
+ * Resolves when "exo start" / "exo resume" is detected.
  */
 async function waitForUnpause(): Promise<void> {
   log('soft paused — listening for unpause keyword...')
@@ -356,12 +360,12 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
-      // Soft pause trigger — "call pause" keeps mic alive but stops processing
+      // Soft pause trigger — "exo pause" keeps mic alive but stops processing
       if (matchesPause(text)) {
         softPaused = true
         log(`soft pause triggered: "${text}"`)
         try {
-          await deliver('[Voice paused — say "call unpause" to resume]')
+          await deliver('[Voice paused — say "exo start" to resume]')
         } catch { /* ignore */ }
         continue
       }
