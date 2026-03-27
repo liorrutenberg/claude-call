@@ -4,20 +4,17 @@
 
 claude-call is an MCP channel server that provides continuous two-way voice I/O for Claude Code. It runs as a subprocess spawned by Claude Code, communicating over stdio using the MCP protocol.
 
-## Channel Protocol
+## Delivery Modes
 
-Unlike tool-based voice solutions (VoiceLayer, VoiceMode), claude-call uses the **MCP channel protocol** — an experimental extension that allows servers to push unsolicited content into Claude's conversation.
+claude-call supports two delivery modes depending on the session type:
 
-When the user speaks, the transcribed text is delivered via:
-```
-notifications/claude/channel → <channel source="voice">text</channel>
-```
+### Dual-session mode (default)
+Voice is delivered directly to the headless call session via FIFO using stream-json format. The call session runs as `claude -p` with stdin connected to a named pipe. Transcribed speech is written as `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."}]}}` to the FIFO.
 
-Claude processes this identically to typed input. For output, Claude calls the `speak` tool exposed by the channel server.
+### Single-session mode (legacy)
+Voice is delivered via MCP channel notifications (`notifications/claude/channel`). Claude sees voice input as `<channel source="voice">` tags alongside typed input.
 
-This bidirectional design means:
-- **Input**: Automatic, no tool call needed — Claude sees voice as another input source
-- **Output**: Via the `speak` tool — Claude decides when to speak vs. type
+In both modes, Claude calls the `speak` tool exposed by the MCP server for TTS output.
 
 ## Voice Loop
 
@@ -145,7 +142,7 @@ Whisper STT (full utterance, beam search)
 Junk filter (removes hallucinations like "thank you")
     │
     ↓
-MCP channel notification → Claude Code session
+Deliver to session (FIFO in dual-session, channel notification in single-session)
 ```
 
 ## Dual-Session Mode

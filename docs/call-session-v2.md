@@ -65,8 +65,6 @@ Main session never loads voice MCP. A per-run MCP config is generated and passed
 
 ```
 .claude-call/
-├── session.json      # PIDs, paths, status, session IDs
-├── inbox.jsonl       # Machine-readable events (call → main)
 └── events.jsonl      # Event pointers from call session (processed by main)
 ```
 
@@ -130,7 +128,7 @@ Default `claude` does NOT start call mode. Voice activates only via:
 | 2 | CLI `call start/stop/status` | `src/cli.ts` | Spawn headless session, per-run MCP config, cleanup on stop, health output |
 | 3 | Remove voice from main session | `src/cli.ts`, `plugin.json`, docs | Dual-mode setup: voice MCP only loads in call process |
 | 4 | Direct FIFO delivery | `src/channel.ts`, `src/voice/recorder.ts` | `deliver()` writes stream-json to FIFO in call mode; channel notifications for legacy single-session |
-| 5 | Shared workspace inbox | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, inbox events, event pointers |
+| 5 | Shared workspace | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, event pointers |
 | 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, event pointer rules |
 | 7 | Audio cue management | new `src/voice/feedback.ts`, `src/voice/tts.ts`, `src/channel.ts`, `src/config.ts` | Separate cue playback from TTS, start/pause/thinking sounds |
 | 8 | Crash supervision & cleanup | `src/cli.ts`, `src/channel.ts`, `src/voice/recorder.ts` | Heartbeat, broken-pipe handling, targeted process kill (only owned children) |

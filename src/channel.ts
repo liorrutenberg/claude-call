@@ -244,7 +244,7 @@ function writeFifo(data: string): boolean {
 const mcp = new Server(
   { name: 'voice', version: '0.1.0' },
   {
-    capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
+    capabilities: { tools: {} },
     instructions: [
       'Voice messages from the user\'s microphone arrive as <channel source="voice">.',
       'These are transcribed speech — treat them as the user talking to you.',

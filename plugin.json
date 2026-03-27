@@ -7,10 +7,5 @@
   },
   "repository": "https://github.com/liorrutenberg/claude-call",
   "license": "Apache-2.0",
-  "keywords": ["voice", "tts", "stt", "channel", "hands-free", "speech"],
-  "channels": [
-    {
-      "server": "voice"
-    }
-  ]
+  "keywords": ["voice", "tts", "stt", "hands-free", "speech"]
 }

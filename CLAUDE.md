@@ -28,9 +28,9 @@ npm run dev          # tsc --watch
 
 ## Architecture
 
-The channel server uses the MCP `claude/channel` experimental capability. Voice messages arrive in Claude's context as `<channel source="voice">` tags. The `speak` tool is exposed for TTS output.
+In dual-session mode, transcribed voice is delivered directly to the headless call session via FIFO (stream-json format). In single-session mode, voice is delivered via MCP channel notifications. The `speak` tool is exposed for TTS output.
 
-**Voice loop**: record → VAD → transcribe → filter junk → deliver via channel notification
+**Voice loop**: record → VAD → transcribe → filter junk → deliver via FIFO (or channel notification in single-session mode)
 
 **Echo suppression**: mute flag prevents recording during TTS playback. `triggerStop()` kills any in-flight recording when TTS starts.
 
