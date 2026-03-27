@@ -21,7 +21,7 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { existsSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs'
+import { existsSync, unlinkSync, appendFileSync, mkdirSync, openSync, writeSync, closeSync, constants } from 'node:fs'
 import { execSync } from 'node:child_process'
 
 import { loadConfig, getLogDir } from './config.js'
@@ -36,6 +36,7 @@ import {
 } from './voice/recorder.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
+import { getRunDirFromEnv, getFifoPath } from './runtime.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -137,6 +138,70 @@ let muted = false
 let softPaused = false
 let voiceLoopRunning = false
 
+// ─── FIFO state (call mode) ─────────────────────────────────
+
+let fifoFd: number | null = null
+let fifoPath: string | null = null
+
+function openFifo(): number | null {
+  const runDir = getRunDirFromEnv()
+  if (!runDir) return null
+
+  fifoPath = getFifoPath(runDir)
+
+  try {
+    // O_WRONLY | O_NONBLOCK: don't block if no reader
+    const fd = openSync(fifoPath, constants.O_WRONLY | constants.O_NONBLOCK)
+    log(`opened FIFO: ${fifoPath}`)
+    return fd
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
+      log(`FIFO not found: ${fifoPath}`)
+    } else if (code === 'ENXIO') {
+      log(`FIFO has no reader: ${fifoPath}`)
+    } else {
+      log(`FIFO open error: ${code}`)
+    }
+    return null
+  }
+}
+
+function closeFifo(): void {
+  if (fifoFd !== null) {
+    try {
+      closeSync(fifoFd)
+    } catch { /* ignore */ }
+    fifoFd = null
+    log('closed FIFO')
+  }
+}
+
+function writeFifo(data: string): boolean {
+  // Lazy open on first write
+  if (fifoFd === null) {
+    fifoFd = openFifo()
+    if (fifoFd === null) return false
+  }
+
+  try {
+    writeSync(fifoFd, data)
+    return true
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'EPIPE') {
+      log('FIFO broken pipe — reader gone')
+    } else if (code === 'EAGAIN') {
+      log('FIFO would block')
+    } else {
+      log(`FIFO write error: ${code}`)
+    }
+    // Close and reopen on next attempt
+    closeFifo()
+    return false
+  }
+}
+
 // ─── MCP Channel Server ────────────────────────────────────
 
 const mcp = new Server(
@@ -231,6 +296,27 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 async function deliver(text: string): Promise<void> {
   log(`delivering: ${text}`)
+
+  // Call mode: write stream-json directly to FIFO
+  const runDir = getRunDirFromEnv()
+  if (runDir) {
+    const msg = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: `<channel source="voice">${text}</channel>` }],
+      },
+    }
+    const json = JSON.stringify(msg) + '\n'
+    if (writeFifo(json)) {
+      log('delivered via FIFO')
+    } else {
+      log('FIFO delivery failed')
+    }
+    return
+  }
+
+  // Legacy mode: MCP channel notification
   await mcp.notification({
     method: 'notifications/claude/channel',
     params: {
