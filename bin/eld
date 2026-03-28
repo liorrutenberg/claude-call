@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# eld — Claude Code with voice call session
+# Equivalent to cld (claude --dangerously-skip-permissions) + voice
+
+claude-call call start 2>/dev/null
+trap "claude-call call stop 2>/dev/null" EXIT INT TERM
+claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display "$@"

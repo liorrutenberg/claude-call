@@ -300,6 +300,20 @@ function installSkillsAndScripts(): void {
   } else {
     writeln(`  \x1b[33mdisplay-server.js not found at ${displayServerSrc} — skipping\x1b[0m`)
   }
+
+  // 3. Install launcher scripts (eld, eldc, eldr) to ~/.claude-call/bin/
+  const binSrc = join(appRoot, 'bin')
+  const binDest = join(homedir(), '.claude-call', 'bin')
+  mkdirSync(binDest, { recursive: true })
+
+  if (existsSync(binSrc)) {
+    const launchers = readdirSync(binSrc).filter(f => !f.startsWith('.'))
+    for (const file of launchers) {
+      copyFileSync(join(binSrc, file), join(binDest, file))
+      try { execSync(`chmod +x "${join(binDest, file)}"`) } catch { /* ignore */ }
+      writeln(`  Installed ${file} → ${join(binDest, file)}`)
+    }
+  }
 }
 
 /**
@@ -798,18 +812,22 @@ async function setup(): Promise<void> {
   // Step 5: Done
   writeln('\x1b[1m5. Setup complete!\x1b[0m')
   writeln()
-  writeln('  Start a voice call from any Claude Code session:')
+  writeln('  \x1b[1mOption A: Launcher scripts (recommended)\x1b[0m')
   writeln()
-  writeln('    \x1b[1m/call-start\x1b[0m')
+  writeln('  Add ~/.claude-call/bin to your PATH, then use:')
   writeln()
-  writeln('  This spawns a separate voice session. Stop it with \x1b[1m/call-stop\x1b[0m.')
+  writeln('    \x1b[1meld\x1b[0m      — Claude + voice (like cld)')
+  writeln('    \x1b[1meldc\x1b[0m     — Claude + voice, continue last conversation')
+  writeln('    \x1b[1meldr\x1b[0m     — Claude + voice, resume last conversation')
   writeln()
-  writeln('  Your main terminal stays free for typing.')
+  writeln('  Voice session starts automatically and stops when you exit.')
+  writeln()
+  writeln('  \x1b[1mOption B: Manual control\x1b[0m')
+  writeln()
+  writeln('  Start Claude with --dangerously-load-development-channels server:call-display')
+  writeln('  Then use \x1b[1m/call-start\x1b[0m and \x1b[1m/call-stop\x1b[0m to manage the voice session.')
   writeln()
   writeln('  Skills installed globally to ~/.claude/commands/ — available in all projects.')
-  writeln()
-  writeln('  NOTE: Start Claude with --dangerously-load-development-channels server:call-display')
-  writeln('  to enable display push from voice calls.')
   writeln()
 }
 
