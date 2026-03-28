@@ -120,6 +120,8 @@ Sox `rec` is used for mic input. Key details:
 
 ## Data Flow
 
+### Voice Input (mic → call session)
+
 ```
 Microphone
     │
@@ -142,7 +144,31 @@ Whisper STT (full utterance, beam search)
 Junk filter (removes hallucinations like "thank you")
     │
     ↓
-Deliver to session (FIFO in dual-session, channel notification in single-session)
+Deliver to call session via FIFO (stream-json format)
+```
+
+### Display Output (call session → main session)
+
+```
+Call session dispatches background agent
+    │
+    ↓
+Agent completes work, formats result
+    │
+    ↓
+HTTP POST to localhost:9847/display (JSON body with text field)
+    │
+    ↓
+display-server.ts receives POST
+    │
+    ↓
+MCP channel notification → notifications/claude/channel
+    │
+    ↓
+Main session receives <channel source="call-display">content</channel>
+    │
+    ↓
+Displayed to user in terminal
 ```
 
 ## Dual-Session Mode
@@ -155,14 +181,16 @@ claude-call uses a dual-session architecture to keep voice isolated from the mai
 │  No voice MCP loaded            │
 │  /call-start → spawns call      │
 │  /call-stop  → kills call       │
-│  Terminal stays free for typing │
-└────────────┬────────────────────┘
-             │
+│  Terminal stays free for typing  │
+│  call-display MCP (channel push) │
+└────────────┬─────────────────────┘
+             │ HTTP localhost:9847 (display push)
 ┌────────────┴────────────────────┐
 │  CALL SESSION (headless)        │
 │  claude -p + stream-json + FIFO │
 │  Voice MCP (sole mic owner)     │
-│  Processes speech continuously  │
+│  Agents curl display endpoint   │
+│  to push output to main session │
 └─────────────────────────────────┘
 ```
 
@@ -171,15 +199,26 @@ claude-call uses a dual-session architecture to keep voice isolated from the mai
 In single-session mode, voice processing blocks the terminal. Background noise queues as messages. You can't type while voice is being handled.
 
 Dual-session mode solves this:
-- **Main session**: Pure text. `/call-start` spawns the voice session, `/call-stop` kills it.
-- **Call session**: Headless `claude -p` process that owns the mic via voice MCP. Converses via speak tool.
+- **Main session**: Pure text. `/call-start` spawns the voice session, `/call-stop` kills it. Loads `call-display` MCP for receiving pushed output.
+- **Call session**: Headless `claude -p` process that owns the mic via voice MCP. Converses via speak tool. Background agents push output to the main session via HTTP.
+
+### Two Delivery Mechanisms
+
+Two different "channel" mechanisms coexist by design:
+
+1. **Voice delivery (FIFO)**: `channel.ts` wraps transcriptions in stream-json format and writes directly to the FIFO → headless call session stdin. This is not MCP — it's direct pipe I/O.
+2. **Display delivery (MCP channel)**: `display-server.ts` is an MCP channel server loaded by the main session. It listens on `localhost:9847`. When call session agents POST formatted output to it, it forwards via `notifications/claude/channel` to the main session, which sees `<channel source="call-display">content</channel>`.
+
+These target different sessions (call vs main) via different mechanisms. Both use "channel" in their naming but are architecturally distinct.
 
 ### Voice Isolation
 
 The voice MCP server is never loaded in the main session. Instead:
-1. `claude-call setup` installs deps, downloads models, creates `/call-start` and `/call-stop` commands
+1. `claude-call setup` installs deps, downloads models, creates `/call-start` and `/call-stop` commands, and adds `call-display` MCP to the project `.mcp.json`
 2. `/call-start` runs `claude-call call start`, which spawns a headless claude with a per-run MCP config
 3. The per-run MCP config includes only the voice server
-4. The main session's `.mcp.json` does not include voice
+4. The main session's `.mcp.json` includes `call-display` (display push) but not voice
+
+The main session must be started with `--dangerously-load-development-channels server:call-display` to enable channel notifications from the display server.
 
 This prevents accidental voice activation in the main terminal and eliminates resource contention between sessions.

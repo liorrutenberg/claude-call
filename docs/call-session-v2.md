@@ -28,10 +28,11 @@ Two independent Claude sessions:
 │  /call-stop  → kills call       │
 │  /call-status → health check    │
 │  Terminal stays 100% free       │
-│  Reads events from .claude-call/  │
-│  events.jsonl when pushed         │
+│  call-display MCP (channel push) │
+│  Receives content via HTTP       │
+│  Displays via channel notification│
 └────────────┬─────────────────────┘
-             │ .claude-call/ (shared workspace)
+             │ HTTP localhost:9847 (display push)
 ┌────────────┴────────────────────┐
 │  CALL SESSION (headless)        │
 │  claude -p + stream-json + FIFO │
@@ -39,8 +40,8 @@ Two independent Claude sessions:
 │  deliver() writes directly to   │
 │  FIFO (no relay watcher)        │
 │  Loads call-session prompt      │
-│  Can read main session context  │
-│  Writes event pointers          │
+│  Agents curl display endpoint   │
+│  to push output to main session │
 └─────────────────────────────────┘
 ```
 
@@ -61,14 +62,15 @@ Global `/tmp/claude-call-stop` and `/tmp/claude-call-pause` move here to prevent
 
 Main session never loads voice MCP. A per-run MCP config is generated and passed only to the headless call process. The main session's `.mcp.json` does not include voice in dual mode.
 
-### 4. Shared workspace at `.claude-call/`
+### 4. Display push via MCP channel
 
-```
-.claude-call/
-└── events.jsonl      # Event pointers from call session (processed by main)
-```
+No files, no polling. The call session pushes output to the main session in real-time:
 
-Call session speaks summaries. When user says "show it" or "put it on screen", call writes an event pointer to `events.jsonl`. The main session's watcher picks it up, fetches the full message from the session log, and displays it.
+1. **call-display MCP** — tiny MCP channel server loaded by the main session. Listens on `localhost:9847`. Pushes content via `notifications/claude/channel` when it receives HTTP POST.
+2. **Call session agents** — when dispatched to do work, agents `curl localhost:9847/display` with the formatted result directly. The call session never processes the full output.
+3. **Main session** — receives `<channel source="call-display">content</channel>` and displays it.
+
+Main session must start with `--dangerously-load-development-channels server:call-display` to enable channel notifications.
 
 ### 5. Audio feedback cues
 
@@ -91,9 +93,9 @@ The call session loads a dedicated prompt that defines its personality and rules
 
 **Shared screen model:**
 - Main terminal = shared screen. Call session references it naturally.
-- "I'll put that on screen" → writes event pointer, main session displays it
+- "I'll put that on screen" → agent pushes to display via HTTP, main session shows it
 - "Check the main session" → reads main session conversation JSON
-- Heavy output goes to event pointers, summaries go to voice
+- Heavy output goes to display push, summaries go to voice
 
 **Delegation rules:**
 - Anything that takes >2s thinking → background agent
@@ -128,11 +130,29 @@ Default `claude` does NOT start call mode. Voice activates only via:
 | 2 | CLI `call start/stop/status` | `src/cli.ts` | Spawn headless session, per-run MCP config, cleanup on stop, health output |
 | 3 | Remove voice from main session | `src/cli.ts`, `plugin.json`, docs | Dual-mode setup: voice MCP only loads in call process |
 | 4 | Direct FIFO delivery | `src/channel.ts`, `src/voice/recorder.ts` | `deliver()` writes stream-json to FIFO in call mode; channel notifications for legacy single-session |
-| 5 | Shared workspace | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, event pointers |
-| 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, event pointer rules |
+| 5 | Shared workspace | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, workspace init |
+| 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, display push rules |
 | 7 | Audio cue management | new `src/voice/feedback.ts`, `src/voice/tts.ts`, `src/channel.ts`, `src/config.ts` | Separate cue playback from TTS, start/pause/thinking sounds |
 | 8 | Crash supervision & cleanup | `src/cli.ts`, `src/channel.ts`, `src/voice/recorder.ts` | Heartbeat, broken-pipe handling, targeted process kill (only owned children) |
 | 9 | Latency measurement | `src/channel.ts`, `src/cli.ts` | Timestamp pipeline stages, log end-to-end numbers |
+
+### Wave 5: Display push via MCP channel (DONE)
+
+Real-time display push from call session to main session via MCP channel notifications.
+
+**Architecture note:** Two different "channel" mechanisms coexist by design:
+- **Voice delivery** (FIFO): `channel.ts` wraps transcriptions in `<channel source="voice">` and writes stream-json to the FIFO → headless call session stdin. Not MCP notifications.
+- **Display delivery** (MCP channel): `display-server.ts` receives HTTP POST → sends `notifications/claude/channel` to the main interactive session. True MCP channel protocol.
+
+These target different sessions (call vs main) via different mechanisms. Both use "channel" in their naming but are architecturally distinct.
+
+| # | Task | Status | What |
+|---|------|--------|------|
+| 10 | call-display MCP server | Done | `src/display-server.ts` — HTTP `POST /display` + `GET /health` on port 9847 → `notifications/claude/channel` push. |
+| 11 | Setup: install + configure display MCP | Done | `claude-call setup` copies display-server.js, adds `call-display` entry to `.mcp.json`. |
+| 12 | Update prompt + remove event pointer system | Done | Prompt uses curl template for agents. Removed `getEventsPath()`, events.jsonl init, `process-events.sh`. |
+| 13 | Update skills | Done | call-start: health check replaces watcher agent. call-stop: clean. |
+| 14 | Update docs | Done | All docs updated with display-push architecture. |
 
 ## Risks & Mitigations
 
@@ -144,3 +164,6 @@ Default `claude` does NOT start call mode. Voice activates only via:
 | Audio cues clobber TTS playback slot | Separate playback channel for cues (task 7) |
 | Duplicate `/call-start` races | Atomic lock file (task 1) |
 | Main session accidentally loads voice | Per-run MCP config, voice only in call process (task 3) |
+| Display port 9847 conflict | Configurable port in config.yaml, fail-fast on EADDRINUSE |
+| Channel flag forgotten on session start | `claude-call setup` prints reminder; call-start skill checks MCP status |
+| Channel notification costs main session tokens | Acceptable trade-off: real-time push, no polling overhead |

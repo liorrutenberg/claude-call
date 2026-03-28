@@ -8,7 +8,7 @@
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, chmodSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
@@ -39,16 +39,12 @@ const VERSION = '0.1.0'
 
 // ─── Call Session Prompt ─────────────────────────────────────
 
-function buildCallSessionPrompt(projectRoot: string, runDir: string): string {
-  const eventsFile = join(projectRoot, '.claude-call', 'events.jsonl')
-  const sessionLog = join(runDir, 'stdout.log')
+function buildCallSessionPrompt(projectRoot: string): string {
   return `# Call Session
 
 You are **exo**, in voice call mode. User sees their terminal (the "shared screen") while talking.
 
 **Project root:** ${projectRoot}
-**Events file:** ${eventsFile}
-**Session log:** ${sessionLog}
 
 ## Your Output Channels (CRITICAL)
 
@@ -56,9 +52,9 @@ You are running headless. Your text responses go to a log file — THE USER CANN
 
 You have exactly TWO ways to reach the user:
 1. speak() — the user hears it
-2. Event pointers — write a pointer to the events file so the main session can display your output
+2. Display push — agents curl localhost:9847/display
 
-If you don't speak() it or write an event pointer, it didn't happen. Never output text expecting the user to read it.
+If you don't speak() it or push it to the display, it didn't happen. Never output text expecting the user to read it.
 
 ## CRITICAL: Ack → Agent → Speak Pattern
 
@@ -77,23 +73,17 @@ NEVER answer inline if it requires reading files, searching, or multi-step work.
 ## Voice Brevity Rule
 
 Spoken responses: keep them concise. If you have detailed output:
-1. Write an event pointer (see below)
+1. Push it to the display (see below)
 2. Speak a summary: "Done, it's on screen" or "Check the terminal"
 
-## Writing Event Pointers (IMPORTANT)
+## Display Push
 
-When a background agent completes and returns results, when user says "show me" or "put it on screen", or when you have significant output that should be visible to the user:
+When dispatching a background agent, include in its instructions:
+"After completing work, push your formatted result to the main session:
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"text": "YOUR_FORMATTED_MARKDOWN_OUTPUT"}'
+Use proper JSON escaping for the text field."
 
-After writing your detailed text response, run a Bash command to append an event pointer:
-
-\`\`\`bash
-UUID=$(grep '"type":"assistant"' '${sessionLog}' | tail -1 | jq -r '.uuid')
-echo '{"ts":"'$(date -u +%FT%TZ)'","uuid":"'"$UUID"'","log":"${sessionLog}","title":"TITLE_HERE"}' >> '${eventsFile}'
-\`\`\`
-
-Replace TITLE_HERE with a short descriptive title (e.g., "Auth Module Overview", "Git Changes This Week").
-
-The main session's watcher will pick up the event, fetch your full message from the session log, and display it.
+The main session will receive the output via MCP channel notification and display it immediately.
 
 ## Voice Style
 
@@ -109,7 +99,7 @@ Concise, conversational, no markdown. "Got it, running sync" not "I will now exe
 
 - Never go silent without acking
 - Never do heavy work inline — always delegate
-- Never just say you'll write an event pointer — actually run the Bash command`
+- Never just say you'll push to display — actually include the curl in agent instructions`
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -272,7 +262,7 @@ function formatUptime(startedAt: string): string {
 }
 
 /**
- * Install skill files to ~/.claude/commands/ and scripts to the app scripts dir.
+ * Install skill files to ~/.claude/commands/ and the display server to the app dir.
  * Called at the end of setup to make /call-start, /call-stop, etc. available globally.
  */
 function installSkillsAndScripts(): void {
@@ -297,22 +287,44 @@ function installSkillsAndScripts(): void {
     writeln(`  \x1b[33mSkills directory not found at ${skillsSrc} — skipping skill install\x1b[0m`)
   }
 
-  // 2. Install scripts to ~/.claude-call/app/scripts/
-  const scriptsSrc = join(appRoot, 'scripts')
-  const scriptsDest = join(homedir(), '.claude-call', 'app', 'scripts')
+  // 2. Copy compiled display-server.js to ~/.claude-call/app/
+  const displayServerSrc = join(appRoot, 'dist', 'display-server.js')
+  const appDest = join(homedir(), '.claude-call', 'app')
+  mkdirSync(appDest, { recursive: true })
 
-  if (existsSync(scriptsSrc)) {
-    mkdirSync(scriptsDest, { recursive: true })
-    const scriptFiles = readdirSync(scriptsSrc).filter(f => f.endsWith('.sh'))
-    for (const file of scriptFiles) {
-      const destPath = join(scriptsDest, file)
-      copyFileSync(join(scriptsSrc, file), destPath)
-      chmodSync(destPath, 0o755)
-      writeln(`  Installed ${file} → ${destPath}`)
-    }
+  if (existsSync(displayServerSrc)) {
+    copyFileSync(displayServerSrc, join(appDest, 'display-server.js'))
+    writeln(`  Installed display-server.js → ${join(appDest, 'display-server.js')}`)
   } else {
-    writeln(`  \x1b[33mScripts directory not found at ${scriptsSrc} — skipping script install\x1b[0m`)
+    writeln(`  \x1b[33mdisplay-server.js not found at ${displayServerSrc} — skipping\x1b[0m`)
   }
+}
+
+/**
+ * Add call-display MCP entry to the project's .mcp.json.
+ */
+function addDisplayMcpConfig(projectRoot: string): void {
+  const mcpJsonPath = join(projectRoot, '.mcp.json')
+  let mcpConfig: { mcpServers: Record<string, unknown> } = { mcpServers: {} }
+
+  if (existsSync(mcpJsonPath)) {
+    try {
+      mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as typeof mcpConfig
+      if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {}
+    } catch {
+      // Malformed — start fresh
+      mcpConfig = { mcpServers: {} }
+    }
+  }
+
+  const displayServerPath = join(homedir(), '.claude-call', 'app', 'display-server.js')
+  mcpConfig.mcpServers['call-display'] = {
+    command: 'node',
+    args: [displayServerPath],
+  }
+
+  writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + '\n')
+  writeln(`  Added call-display to ${mcpJsonPath}`)
 }
 
 // ─── Call commands ──────────────────────────────────────────
@@ -413,7 +425,7 @@ async function callStart(): Promise<void> {
         content: [
           {
             type: 'text',
-            text: `${buildCallSessionPrompt(projectRoot, runDir)}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
+            text: `${buildCallSessionPrompt(projectRoot)}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
           },
         ],
       },
@@ -732,15 +744,20 @@ async function setup(): Promise<void> {
   }
   writeln()
 
-  // Step 3: Install skills and scripts globally
-  writeln('\x1b[1m3. Installing skills and scripts...\x1b[0m')
+  // Detect project root for pronunciation + MCP config
+  let pronunciationFile: string | undefined
+  const projectRoot = findProjectRoot()
+
+  // Step 3: Install skills, scripts, and display MCP globally
+  writeln('\x1b[1m3. Installing skills and display server...\x1b[0m')
   writeln()
   installSkillsAndScripts()
+  if (projectRoot) {
+    addDisplayMcpConfig(projectRoot)
+  }
   writeln()
 
   // Look for pronunciation.yaml in the project directory
-  let pronunciationFile: string | undefined
-  const projectRoot = findProjectRoot()
   if (projectRoot) {
     const pronunciationPaths = [
       join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
@@ -788,6 +805,9 @@ async function setup(): Promise<void> {
   writeln('  Your main terminal stays free for typing.')
   writeln()
   writeln('  Skills installed globally to ~/.claude/commands/ — available in all projects.')
+  writeln()
+  writeln('  NOTE: Start Claude with --dangerously-load-development-channels server:call-display')
+  writeln('  to enable display push from voice calls.')
   writeln()
 }
 

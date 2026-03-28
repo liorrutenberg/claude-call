@@ -33,7 +33,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
-- **Event pointers** — Call session writes event pointers to `.claude-call/events.jsonl` so the main session can display detailed output
+- **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
 - **Audio feedback** — Thinking pulse (waiting for response), start/resume chime, pause chime — so you always know the system state
 
 ### Voice Engine
@@ -84,7 +84,13 @@ Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads m
 
 ### Start a Voice Call
 
-From Claude Code:
+Start Claude Code with the display channel enabled:
+
+```bash
+claude --dangerously-load-development-channels server:call-display
+```
+
+Then from Claude Code:
 
 ```
 /call-start
@@ -171,9 +177,9 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 │  /call-start → spawns call      │
 │  /call-stop  → kills call       │
 │  Terminal stays 100% free       │
-│  Reads events from .claude-call/   │
+│  call-display MCP (channel push)│
 └────────────┬────────────────────┘
-             │ .claude-call/ (shared workspace)
+             │ HTTP localhost:9847 (display push)
 ┌────────────┴────────────────────┐
 │  CALL SESSION (headless)        │
 │  claude -p + stream-json + FIFO │
@@ -202,16 +208,9 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 └─────────────────────────────────┘
 ```
 
-### Shared Workspace
+### Display Push
 
-```
-.claude-call/
-├── session.json      # PIDs, paths, status
-├── inbox.jsonl       # Machine-readable events (call → main)
-└── events.jsonl      # Event pointers from call session (processed by main)
-```
-
-The call session speaks concise summaries. When you say "show it" or "put it on screen", an event pointer is written to `events.jsonl` so the main session can fetch and display the full output.
+The call session speaks concise summaries. When you say "show it" or "put it on screen", the call session's background agents push formatted output directly to the main session via HTTP POST to the display MCP server (`localhost:9847`), which forwards it as an MCP channel notification.
 
 See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 
@@ -273,6 +272,17 @@ Built with:
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime) (MIT) — ML inference
 
 Inspired by [VoiceLayer](https://github.com/EtanHey/voicelayer).
+
+## Security
+
+The headless call session runs with `--dangerously-skip-permissions` because it cannot prompt for user confirmation. This means voice-triggered actions (file writes, bash commands) execute without approval. Background agents dispatched by the call session inherit this permission level.
+
+**Mitigations:**
+- Voice MCP runs only when explicitly started via `/call-start`
+- Whisper's junk filter prevents hallucinated commands from being processed
+- All processing is local — no data leaves your machine
+
+Be aware that a misheard transcript could trigger unintended actions. Use the wake word prefix (`/call-prefix-on`) in noisy environments.
 
 ## License
 

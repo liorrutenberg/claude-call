@@ -2,9 +2,6 @@
  * Shared workspace for call-to-main session communication.
  *
  * Location: <projectRoot>/.claude-call/
- *
- * Contents:
- * - events.jsonl   — event pointers from call session (processed by main session watcher)
  */
 
 import {
@@ -12,7 +9,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  rmSync,
 } from 'node:fs'
 import { join } from 'node:path'
 
@@ -27,19 +23,11 @@ export function getWorkspacePath(projectRoot: string): string {
   return join(projectRoot, WORKSPACE_DIR)
 }
 
-/**
- * Get the events.jsonl path for a project.
- * This is the event pointer file written by the call session and consumed by the main session watcher.
- */
-export function getEventsPath(projectRoot: string): string {
-  return join(getWorkspacePath(projectRoot), 'events.jsonl')
-}
-
 // ─── Workspace initialization ───────────────────────────────
 
 /**
  * Initialize workspace directory.
- * Creates the directory structure and cleans stale files.
+ * Creates the directory structure.
  *
  * @param projectRoot - The project root directory
  * @returns The workspace path
@@ -60,12 +48,6 @@ export function initWorkspace(projectRoot: string): string {
     }
   } catch {
     // Ignore — gitignore is nice-to-have, not critical
-  }
-
-  // Clean stale events from previous sessions
-  const eventsPath = getEventsPath(projectRoot)
-  if (existsSync(eventsPath)) {
-    rmSync(eventsPath, { force: true })
   }
 
   return workspacePath
