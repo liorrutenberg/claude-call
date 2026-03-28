@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "config",
+    "skills",
     "plugin.json",
     "README.md",
     "LICENSE"

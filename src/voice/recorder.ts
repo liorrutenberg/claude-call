@@ -21,16 +21,18 @@ import {
   VAD_CHUNK_SAMPLES,
 } from './vad.js'
 import type { SilenceMode } from '../config.js'
+import {
+  hasStopSignal as runtimeHasStopSignal,
+  clearStopSignal as runtimeClearStopSignal,
+  hasPauseSignal,
+  setStopSignal,
+} from '../runtime.js'
 
 const SAMPLE_RATE = 16000
 const BYTES_PER_SAMPLE = 2
 
 /** Seconds with no speech before giving up on hearing anything. */
 const PRE_SPEECH_TIMEOUT_S = 15
-
-/** Signal file paths for cross-process coordination. */
-const STOP_FILE = '/tmp/claude-call-stop'
-const PAUSE_FILE = '/tmp/claude-call-pause'
 
 // ─── Audio utilities ────────────────────────────────────────
 
@@ -119,23 +121,47 @@ function createWavBuffer(pcmData: Uint8Array): Uint8Array {
   return wav
 }
 
+// ─── Child process tracking ─────────────────────────────────
+// Track spawned child PIDs for targeted cleanup (avoid killing unrelated rec processes)
+
+const childPids: Set<number> = new Set()
+
+export function registerChildPid(pid: number): void {
+  childPids.add(pid)
+}
+
+export function unregisterChildPid(pid: number): void {
+  childPids.delete(pid)
+}
+
+export function killOwnedChildren(): void {
+  for (const pid of childPids) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch { /* already dead */ }
+  }
+  childPids.clear()
+}
+
 // ─── Stop / pause signals ───────────────────────────────────
+// Now delegated to src/runtime.ts for per-run isolation.
+// Uses CLAUDE_CALL_RUN_DIR env var when set, falls back to global /tmp/ paths.
 
 function hasStopSignal(): boolean {
-  return existsSync(STOP_FILE)
+  return runtimeHasStopSignal()
 }
 
 function clearStopSignal(): void {
-  try { if (existsSync(STOP_FILE)) unlinkSync(STOP_FILE) } catch { /* ignore */ }
+  runtimeClearStopSignal()
 }
 
 export function isPaused(): boolean {
-  return existsSync(PAUSE_FILE)
+  return hasPauseSignal()
 }
 
 /** Trigger stop signal to kill in-flight recording (e.g., when TTS starts). */
 export function triggerStop(): void {
-  try { writeFileSync(STOP_FILE, `stop at ${new Date().toISOString()}`) } catch { /* ignore */ }
+  setStopSignal()
 }
 
 // ─── Keyword interrupt monitor ──────────────────────────────
@@ -179,10 +205,13 @@ export async function startKeywordMonitor(
     '-t', 'raw', '-q', '-',
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
 
+  if (rec.pid) registerChildPid(rec.pid)
+
   const monitor: KeywordMonitor = {
     onBurst: null,
     stop() {
       stopped = true
+      if (rec.pid) unregisterChildPid(rec.pid)
       try { rec.kill('SIGTERM') } catch { /* ignore */ }
     },
   }
@@ -253,6 +282,7 @@ export interface RecordOptions {
   silenceMode?: SilenceMode
   timeoutMs?: number
   onSpeechStart?: () => void
+  onSpeechEnd?: () => void
   onPreview?: (wavPath: string) => Promise<void> | void
   previewIntervalMs?: number
   previewWindowS?: number
@@ -307,6 +337,7 @@ export async function recordUtterance(
   const previewWindowS = options.previewWindowS ?? 5
   const onPreview = options.onPreview
   const onSpeechStart = options.onSpeechStart
+  const onSpeechEnd = options.onSpeechEnd
 
   return new Promise<string | null>((resolve, reject) => {
     let consecutiveSilent = 0
@@ -353,6 +384,7 @@ export async function recordUtterance(
       clearTimeout(timer)
 
       if (recorder && !recorder.killed) {
+        if (recorder.pid) unregisterChildPid(recorder.pid)
         try { recorder.kill('SIGTERM') } catch { /* ignore */ }
         recorder = null
       }
@@ -392,6 +424,8 @@ export async function recordUtterance(
         '-q',
         '-',
       ], { stdio: ['ignore', 'pipe', 'pipe'] })
+
+      if (recorder.pid) registerChildPid(recorder.pid)
 
       recorder.stderr?.on('data', () => {}) // drain stderr
 
@@ -447,6 +481,7 @@ export async function recordUtterance(
             }
 
             if (hasSpeechDetected && consecutiveSilent >= silenceChunksNeeded) {
+              onSpeechEnd?.()
               finish()
               return
             }

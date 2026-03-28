@@ -21,8 +21,8 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { existsSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs'
-import { execSync } from 'node:child_process'
+import { existsSync, unlinkSync, appendFileSync, mkdirSync, openSync, writeSync, closeSync, constants } from 'node:fs'
+import { join } from 'node:path'
 
 import { loadConfig, getLogDir } from './config.js'
 import { initVAD } from './voice/vad.js'
@@ -33,9 +33,19 @@ import {
   isPaused,
   triggerStop,
   startKeywordMonitor,
+  killOwnedChildren,
 } from './voice/recorder.js'
+import {
+  playStartChime,
+  playPauseChime,
+  playSpeechStartBeep,
+  playSpeechEndBeep,
+  startThinkingPulse,
+  stopThinkingPulse,
+} from './voice/feedback.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
+import { getRunDirFromEnv, getFifoPath, updateStatus } from './runtime.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -95,6 +105,28 @@ function matchesUnpause(text: string): boolean {
   return UNPAUSE_PHRASES.some(p => t.includes(p))
 }
 
+// ─── Wake word filter (dual mode) ────────────────────────────
+
+const WAKE_PREFIXES = ['exo ', 'echo ', 'exel ', 'exo, ', 'echo, ', 'exo. ', 'echo. ']
+
+/**
+ * Extract the text after the wake word prefix.
+ * Returns null if no wake word found, or the stripped text if found.
+ */
+function extractAfterWakeWord(text: string): string | null {
+  const t = normalizeForMatch(text)
+  for (const prefix of WAKE_PREFIXES) {
+    if (t.startsWith(prefix)) {
+      // Find position in original text and strip
+      const idx = text.toLowerCase().indexOf(prefix.trimEnd())
+      if (idx >= 0) {
+        return text.slice(idx + prefix.trimEnd().length).trim()
+      }
+    }
+  }
+  return null
+}
+
 /**
  * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
  * Resolves when "exo start" / "exo resume" is detected.
@@ -136,13 +168,85 @@ async function waitForUnpause(): Promise<void> {
 let muted = false
 let softPaused = false
 let voiceLoopRunning = false
+let sessionDead = false
+
+// ─── FIFO state (call mode) ─────────────────────────────────
+
+let fifoFd: number | null = null
+let fifoPath: string | null = null
+
+function openFifo(): number | null {
+  const runDir = getRunDirFromEnv()
+  if (!runDir) return null
+
+  fifoPath = getFifoPath(runDir)
+
+  try {
+    // O_WRONLY | O_NONBLOCK: don't block if no reader
+    const fd = openSync(fifoPath, constants.O_WRONLY | constants.O_NONBLOCK)
+    log(`opened FIFO: ${fifoPath}`)
+    return fd
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
+      log(`FIFO not found: ${fifoPath}`)
+    } else if (code === 'ENXIO') {
+      log(`FIFO has no reader: ${fifoPath}`)
+    } else {
+      log(`FIFO open error: ${code}`)
+    }
+    return null
+  }
+}
+
+function closeFifo(): void {
+  if (fifoFd !== null) {
+    try {
+      closeSync(fifoFd)
+    } catch { /* ignore */ }
+    fifoFd = null
+    log('closed FIFO')
+  }
+}
+
+function writeFifo(data: string): boolean {
+  // Lazy open on first write
+  if (fifoFd === null) {
+    fifoFd = openFifo()
+    if (fifoFd === null) return false
+  }
+
+  try {
+    writeSync(fifoFd, data)
+    return true
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'EPIPE') {
+      log('FIFO broken pipe — Claude session has exited')
+      sessionDead = true
+      // Update status to crashed so CLI can detect
+      const runDir = getRunDirFromEnv()
+      if (runDir) {
+        updateStatus(runDir, { status: 'crashed' })
+        log('status updated to crashed')
+      }
+    } else if (code === 'EAGAIN') {
+      log('FIFO would block')
+    } else {
+      log(`FIFO write error: ${code}`)
+    }
+    // Close and reopen on next attempt
+    closeFifo()
+    return false
+  }
+}
 
 // ─── MCP Channel Server ────────────────────────────────────
 
 const mcp = new Server(
   { name: 'voice', version: '0.1.0' },
   {
-    capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
+    capabilities: { tools: {} },
     instructions: [
       'Voice messages from the user\'s microphone arrive as <channel source="voice">.',
       'These are transcribed speech — treat them as the user talking to you.',
@@ -180,11 +284,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === 'speak') {
     const text = (args.text as string) ?? ''
     if (text) {
+      const speakStart = Date.now()
+      stopThinkingPulse() // Stop thinking pulse when response begins
       log(`speaking: ${text}`)
 
       const config = loadConfig()
       const interruptKeywords = config.interrupt.keywords
       let interrupted = false
+      let tFirstAudio = 0
       const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
       kwMonitor.onBurst = async (wavPath: string) => {
@@ -213,9 +320,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             log('unmuted (done speaking)')
           },
           onInterruptCheck: async () => interrupted,
+          onFirstAudio: () => {
+            tFirstAudio = Date.now()
+          },
         })
       } finally {
         kwMonitor.stop()
+        const speakFinish = Date.now()
+        if (tFirstAudio) {
+          log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
+        } else {
+          log(`speak: tts_total=${speakFinish - speakStart}ms`)
+        }
       }
     }
     return { content: [{ type: 'text', text: 'spoken' }] }
@@ -231,13 +347,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 async function deliver(text: string): Promise<void> {
   log(`delivering: ${text}`)
-  await mcp.notification({
-    method: 'notifications/claude/channel',
-    params: {
-      content: text,
-      meta: { ts: new Date().toISOString() },
+
+  const runDir = getRunDirFromEnv()
+  if (!runDir) {
+    log('ERROR: No run dir available (CLAUDE_CALL_RUN_DIR not set)')
+    return
+  }
+
+  const msg = {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: `<channel source="voice">${text}</channel>` }],
     },
-  })
+  }
+  const json = JSON.stringify(msg) + '\n'
+  if (writeFifo(json)) {
+    log('delivered via FIFO')
+  } else {
+    log('FIFO delivery failed')
+  }
 }
 
 // ─── Voice loop ─────────────────────────────────────────────
@@ -265,7 +394,15 @@ async function voiceLoop(): Promise<void> {
   log(`config: silence=${config.silence.mode}, tts=${config.tts.engine}, rate=${config.tts.rate}`)
   log('starting voice loop')
 
+  // Play start chime when voice loop begins
+  playStartChime()
+
   while (true) {
+    if (sessionDead) {
+      log('session dead, exiting voice loop')
+      return
+    }
+
     try {
       if (muted) {
         await new Promise(r => setTimeout(r, 100))
@@ -280,6 +417,7 @@ async function voiceLoop(): Promise<void> {
       if (softPaused) {
         await waitForUnpause()
         if (softPaused) continue // hard pause or other exit
+        playStartChime()
         log('voice loop resumed from soft pause')
         await deliver('[Voice resumed]')
         continue
@@ -292,8 +430,13 @@ async function voiceLoop(): Promise<void> {
         silenceMode: config.silence.mode,
         onSpeechStart: () => {
           log('speech detected — listening...')
+          playSpeechStartBeep()
           partialText = ''
           stableText = ''
+        },
+        onSpeechEnd: () => {
+          log('speech ended — captured')
+          playSpeechEndBeep()
         },
         previewIntervalMs: 600,
         previewWindowS: 5,
@@ -338,10 +481,11 @@ async function voiceLoop(): Promise<void> {
 
       log(`transcribing (full): ${wavPath}`)
       let text: string
+      let t2: number, t3: number
       try {
-        const t2 = Date.now()
+        t2 = Date.now()
         text = applySttCorrections(normalizeText(await transcribe(wavPath)))
-        const t3 = Date.now()
+        t3 = Date.now()
         log(`transcription took ${t3 - t2}ms: "${text}"`)
       } catch (err) {
         log(`transcription error: ${(err as Error).message}`)
@@ -361,8 +505,10 @@ async function voiceLoop(): Promise<void> {
       }
 
       // Soft pause trigger — "exo pause" keeps mic alive but stops processing
+      // Must check BEFORE wake word stripping so "exo pause" matches
       if (matchesPause(text)) {
         softPaused = true
+        playPauseChime()
         log(`soft pause triggered: "${text}"`)
         try {
           await deliver('[Voice paused — say "exo start" to resume]')
@@ -370,11 +516,32 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
+      // Wake word filter in dual mode — require "exo" prefix
+      // Applied after pause check so "exo pause" still works
+      // Check both config AND runtime signal file (prefix file in run dir enables it)
+      const runDirForPrefix = getRunDirFromEnv()
+      const prefixEnabled = runDirForPrefix
+        ? (existsSync(join(runDirForPrefix, 'prefix')) ||
+           (config.wakeWord.enabled && !existsSync(join(runDirForPrefix, 'no-prefix'))))
+        : config.wakeWord.enabled
+      if (runDirForPrefix && prefixEnabled) {
+        const stripped = extractAfterWakeWord(text)
+        if (!stripped) {
+          log(`filtered (no wake word): "${text}"`)
+          continue
+        }
+        text = stripped
+      }
+
       log(`heard: ${text}`)
 
       try {
         await deliver(text)
+        const tDelivered = Date.now()
         log('delivered')
+        log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
+        // Start thinking pulse while waiting for Claude's response
+        startThinkingPulse()
       } catch (err) {
         log(`deliver error: ${(err as Error).message}`)
       }
@@ -385,22 +552,15 @@ async function voiceLoop(): Promise<void> {
   }
 }
 
-// ─── Cleanup stale processes ────────────────────────────────
+// ─── Cleanup owned children ─────────────────────────────────
 
-function killStaleRecProcesses(): void {
-  try {
-    const myPid = process.pid
-    const out = execSync('pgrep -lf "rec -r"', { timeout: 3000 }).toString()
-    const pids = out.split('\n')
-      .map(line => parseInt(line.trim(), 10))
-      .filter(pid => !isNaN(pid) && pid !== myPid)
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
-    }
-    if (pids.length > 0) {
-      log(`killed ${pids.length} stale rec process(es): ${pids.join(', ')}`)
-    }
-  } catch { /* no matching processes */ }
+let cleanedUp = false
+
+function cleanupOnExit(): void {
+  if (cleanedUp) return
+  cleanedUp = true
+  killOwnedChildren()
+  closeFifo()
 }
 
 // ─── Main ───────────────────────────────────────────────────
@@ -414,7 +574,22 @@ async function main(): Promise<void> {
   }
   mainStarted = true
 
-  killStaleRecProcesses()
+  // Clean shutdown handlers
+  process.on('SIGTERM', () => {
+    log('received SIGTERM — cleaning up')
+    cleanupOnExit()
+    process.exit(0)
+  })
+
+  process.on('SIGINT', () => {
+    log('received SIGINT — cleaning up')
+    cleanupOnExit()
+    process.exit(0)
+  })
+
+  process.on('exit', () => {
+    cleanupOnExit()
+  })
 
   await mcp.connect(new StdioServerTransport())
   log('connected to Claude Code')

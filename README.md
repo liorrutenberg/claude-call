@@ -4,22 +4,41 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/liorrutenberg/claude-call)
 
-Continuous two-way voice conversations for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+Voice companion for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Talk to Claude hands-free. Claude talks back. No push-to-talk, no cloud STT, fully local speech processing.
+Talk to Claude hands-free while your terminal stays free for typing. Voice runs in a headless background session — it listens, responds via TTS, and dispatches background agents for heavy work. Results get pushed to your main screen so you never waste context — side lookups, checks, and research happen in the voice session, and only what matters gets injected into your main session.
+
+No push-to-talk, no cloud STT, fully local speech processing.
 
 ## How It Works
 
-claude-call is an MCP channel server that plugs into Claude Code. Unlike tool-based voice solutions, it uses the **channel protocol** — voice input arrives as `<channel source="voice">`, so Claude treats it identically to a typed message. No explicit tool calls needed.
+claude-call runs a **dual-session architecture**: voice lives in a separate headless Claude session so your main terminal is never blocked.
+
+```
+/call-start
+  ├─ Main session (interactive terminal) — typing, tools, normal Claude Code
+  └─ Call session (headless claude -p) — owns the mic, speaks responses,
+       delegates heavy work to background agents
+```
+
+Under the hood, the call session is an MCP channel server using the **channel protocol** — voice input arrives as `<channel source="voice">`, so Claude treats it identically to a typed message. No explicit tool calls needed.
 
 ```
 You speak → sox records → Silero VAD detects speech → Whisper transcribes →
-  Claude receives text → Claude calls speak tool → TTS synthesizes →
-    You hear the response (and can interrupt mid-sentence)
+  Call session receives text → acks immediately → dispatches background agents →
+    speaks result via TTS → you hear the response (and can interrupt mid-sentence)
 ```
 
 ## Features
 
+### Dual Session Model
+- **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
+- **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
+- **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
+- **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
+- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/resume chime, pause chime — so you always know the system state
+
+### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
 - **Echo suppression** — Recording automatically mutes during TTS playback
 - **Whisper STT** — Local speech-to-text via whisper.cpp (server mode + CLI fallback)
@@ -63,17 +82,45 @@ Run from your project directory:
 claude-call setup
 ```
 
-Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, adds voice to your project's `.mcp.json`, and creates `/call-start` and `/call-stop` slash commands.
+Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, and creates `/call-start` and `/call-stop` slash commands.
 
-Then launch Claude Code with voice enabled:
+### Start a Voice Call
+
+**Option A: Launcher scripts (recommended)**
+
+Add `~/.claude-call/bin` to your PATH, then:
 
 ```bash
-claude --dangerously-load-development-channels server:voice
+eld       # Claude + voice (like cld)
+eldc      # Claude + voice, continue last conversation
+eldr      # Claude + voice, resume last conversation
 ```
 
-Say `/call-start` and start talking.
+Voice starts automatically and stops when you exit. No manual cleanup needed.
 
-> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the MCP config and slash commands to whichever project you run it from.
+**Option B: Manual control**
+
+Start Claude Code with the display channel enabled:
+
+```bash
+claude --dangerously-load-development-channels server:call-display
+```
+
+Then from Claude Code:
+
+```
+/call-start
+```
+
+This spawns a separate voice session. Your main terminal stays free for typing.
+
+Stop the call with:
+
+```
+/call-stop
+```
+
+> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the slash commands to whichever project you run it from.
 
 ## Voice Commands
 
@@ -140,34 +187,49 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                Claude Code Session              │
-│                                                 │
-│  <channel source="voice">transcribed text</...> │
-│                     ↑                     │     │
-│                     │              speak tool    │
-│                     │                     ↓     │
-│  ┌──────────────────┴─────────────────────┐     │
-│  │         MCP Channel Server             │     │
-│  │         (channel.ts)                   │     │
-│  │                                        │     │
-│  │  Voice Loop        Speak Handler       │     │
-│  │  ┌──────────┐     ┌──────────────┐    │     │
-│  │  │ Record   │     │ TTS Cascade  │    │     │
-│  │  │ ↓        │     │ ↓            │    │     │
-│  │  │ VAD      │     │ Sentence     │    │     │
-│  │  │ ↓        │     │ Pipeline     │    │     │
-│  │  │ Whisper  │     │ ↓            │    │     │
-│  │  │ ↓        │     │ Playback     │    │     │
-│  │  │ Filter   │     │              │    │     │
-│  │  │ ↓        │     │ Keyword      │    │     │
-│  │  │ Deliver  │     │ Monitor      │    │     │
-│  │  └──────────┘     └──────────────┘    │     │
-│  └────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────┐
+│  MAIN SESSION (interactive)     │
+│  No voice MCP loaded            │
+│  /call-start → spawns call      │
+│  /call-stop  → kills call       │
+│  Terminal stays 100% free       │
+│  call-display MCP (channel push)│
+└────────────┬────────────────────┘
+             │ HTTP localhost:9847 (display push)
+┌────────────┴────────────────────┐
+│  CALL SESSION (headless)        │
+│  claude -p + stream-json + FIFO │
+│  Voice MCP (sole mic owner)     │
+│                                 │
+│  Voice Loop        Speak Handler│
+│  ┌──────────┐     ┌───────────┐ │
+│  │ Record   │     │ TTS       │ │
+│  │ ↓        │     │ Cascade   │ │
+│  │ VAD      │     │ ↓         │ │
+│  │ ↓        │     │ Sentence  │ │
+│  │ Whisper  │     │ Pipeline  │ │
+│  │ ↓        │     │ ↓         │ │
+│  │ Filter   │     │ Playback  │ │
+│  │ ↓        │     │ ↓         │ │
+│  │ FIFO     │     │ Keyword   │ │
+│  │ Deliver  │     │ Monitor   │ │
+│  └──────────┘     └───────────┘ │
+│                                 │
+│  Audio Feedback                 │
+│  ┌───────────────────────────┐  │
+│  │ Speech start/end beeps    │  │
+│  │ Thinking pulse (waiting)  │  │
+│  │ Start / resume chime      │  │
+│  │ Pause chime               │  │
+│  └───────────────────────────┘  │
+└─────────────────────────────────┘
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the deep dive.
+### Display Push
+
+The call session speaks concise summaries. When you say "show it" or "put it on screen", the call session's background agents push formatted output directly to the main session via HTTP POST to the display MCP server (`localhost:9847`), which forwards it as an MCP channel notification.
+
+See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 
 ## Pronunciation
 
@@ -227,6 +289,17 @@ Built with:
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime) (MIT) — ML inference
 
 Inspired by [VoiceLayer](https://github.com/EtanHey/voicelayer).
+
+## Security
+
+The headless call session runs with `--dangerously-skip-permissions` because it cannot prompt for user confirmation. This means voice-triggered actions (file writes, bash commands) execute without approval. Background agents dispatched by the call session inherit this permission level.
+
+**Mitigations:**
+- Voice MCP runs only when explicitly started via `/call-start`
+- Whisper's junk filter prevents hallucinated commands from being processed
+- All processing is local — no data leaves your machine
+
+Be aware that a misheard transcript could trigger unintended actions. Use the wake word prefix (`/call-prefix-on`) in noisy environments.
 
 ## License
 

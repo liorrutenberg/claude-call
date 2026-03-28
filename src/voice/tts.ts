@@ -207,6 +207,8 @@ export interface SpeakOptions {
   onUnmute?: () => void
   /** Return true to stop speaking (user wants to interrupt). */
   onInterruptCheck?: () => Promise<boolean>
+  /** Called when first audio starts playing (for latency measurement). */
+  onFirstAudio?: () => void
 }
 
 /**
@@ -222,9 +224,18 @@ export async function speak(text: string, opts?: SpeakOptions): Promise<void> {
 
   opts?.onMute?.()
 
+  let firstAudioFired = false
+  const fireFirstAudio = () => {
+    if (!firstAudioFired) {
+      firstAudioFired = true
+      opts?.onFirstAudio?.()
+    }
+  }
+
   try {
     if (sentences.length <= 1) {
       const file = await synthesizeToFile(text)
+      fireFirstAudio()
       if (file) {
         await playAudio(file)
       } else {
@@ -253,6 +264,7 @@ export async function speak(text: string, opts?: SpeakOptions): Promise<void> {
         break
       }
 
+      fireFirstAudio()
       if (file) {
         await playAudio(file)
       } else {

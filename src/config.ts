@@ -40,6 +40,15 @@ export interface PronunciationConfig {
   file: string
 }
 
+export interface FeedbackConfig {
+  enabled: boolean
+  volume: number
+}
+
+export interface WakeWordConfig {
+  enabled: boolean
+}
+
 export interface Config {
   dataDir: string
   tts: TtsConfig
@@ -47,6 +56,8 @@ export interface Config {
   silence: SilenceConfig
   interrupt: InterruptConfig
   pronunciation: PronunciationConfig
+  feedback: FeedbackConfig
+  wakeWord: WakeWordConfig
 }
 
 // ─── Defaults ───────────────────────────────────────────────
@@ -72,10 +83,17 @@ function defaults(): Config {
       mode: 'quick',
     },
     interrupt: {
-      keywords: ['stop', 'wait', 'hold on', 'pause', 'hey'],
+      keywords: ['stop', 'wait', 'hold on', 'pause', 'hey', 'exo'],
     },
     pronunciation: {
       file: '',
+    },
+    feedback: {
+      enabled: true,
+      volume: 0.3,
+    },
+    wakeWord: {
+      enabled: false,
     },
   }
 }
@@ -89,6 +107,8 @@ interface YamlConfig {
   silence?: Partial<SilenceConfig>
   interrupt?: Partial<InterruptConfig>
   pronunciation?: Partial<PronunciationConfig>
+  feedback?: Partial<FeedbackConfig>
+  wakeWord?: Partial<WakeWordConfig>
 }
 
 function loadYaml(path: string): YamlConfig {
@@ -147,6 +167,9 @@ function applyEnvOverrides(config: Config): void {
 
   const pronFile = env('PRONUNCIATION_FILE')
   if (pronFile) config.pronunciation.file = pronFile
+
+  const wakeWordEnabled = env('WAKE_WORD_ENABLED')
+  if (wakeWordEnabled !== undefined) config.wakeWord.enabled = wakeWordEnabled !== 'false' && wakeWordEnabled !== '0'
 }
 
 // ─── Merge ──────────────────────────────────────────────────
@@ -161,6 +184,8 @@ function merge(base: Config, yaml: YamlConfig): Config {
       keywords: yaml.interrupt?.keywords ?? base.interrupt.keywords,
     },
     pronunciation: { ...base.pronunciation, ...yaml.pronunciation },
+    feedback: { ...base.feedback, ...yaml.feedback },
+    wakeWord: { ...base.wakeWord, ...yaml.wakeWord },
   }
 }
 
@@ -188,3 +213,6 @@ export function getModelsDir(): string {
 export function getLogDir(): string {
   return join(loadConfig().dataDir, 'logs')
 }
+
+// Re-export per-run helpers from runtime module
+export { getProjectHash, getRunDir } from './runtime.js'

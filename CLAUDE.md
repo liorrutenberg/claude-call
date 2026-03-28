@@ -17,6 +17,7 @@ npm run dev          # tsc --watch
 
 - `src/channel.ts` — MCP channel server (main entry, voice loop, speak handler)
 - `src/cli.ts` — CLI entry point (setup, check, serve commands)
+- `src/display-server.ts` — MCP channel server for display push (HTTP POST → channel notification to main session)
 - `src/config.ts` — Config loader (~/.claude-call/config.yaml + CLAUDE_CALL_* env vars)
 - `src/voice/vad.ts` — Silero VAD v5 (ONNX inference, 512-sample chunks)
 - `src/voice/stt.ts` — Whisper STT (server + CLI, two quality modes)
@@ -28,9 +29,11 @@ npm run dev          # tsc --watch
 
 ## Architecture
 
-The channel server uses the MCP `claude/channel` experimental capability. Voice messages arrive in Claude's context as `<channel source="voice">` tags. The `speak` tool is exposed for TTS output.
+Two delivery mechanisms coexist by design:
+- **Voice delivery (FIFO)**: Transcribed voice is delivered directly to the headless call session via FIFO (stream-json format). The `speak` tool is exposed for TTS output.
+- **Display delivery (MCP channel)**: `display-server.ts` receives HTTP POST from call session agents → sends `notifications/claude/channel` to the main interactive session.
 
-**Voice loop**: record → VAD → transcribe → filter junk → deliver via channel notification
+**Voice loop**: record → VAD → transcribe → filter junk → deliver via FIFO (or channel notification in single-session mode)
 
 **Echo suppression**: mute flag prevents recording during TTS playback. `triggerStop()` kills any in-flight recording when TTS starts.
 

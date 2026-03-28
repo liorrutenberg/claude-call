@@ -56,6 +56,12 @@ else
 fi
 chmod +x "$INSTALL_DIR/dist/cli.js"
 
+# ─── Make scripts executable ─────────────────────────────────
+
+if [ -d "$INSTALL_DIR/scripts" ]; then
+  chmod +x "$INSTALL_DIR/scripts/"*.sh 2>/dev/null || true
+fi
+
 # ─── Verify ──────────────────────────────────────────────────
 
 echo
