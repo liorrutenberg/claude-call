@@ -97,6 +97,36 @@ export function playPauseChime(): void {
   ], 'pause chime')
 }
 
+// ─── Speech Detection Beeps ─────────────────────────────────
+
+/**
+ * Play a short high beep when VAD detects speech start.
+ * Single quick tick — confirms mic is capturing.
+ */
+export function playSpeechStartBeep(): void {
+  const vol = getVolume() * 0.5
+  playToneAsync([
+    '-n', '-q',
+    'synth', '0.06', 'sine', '880',
+    'vol', String(vol),
+    'fade', 'q', '0.01', '-0', '0.01',
+  ], 'speech start beep')
+}
+
+/**
+ * Play a short low beep when VAD detects speech end.
+ * Single quick tick — confirms utterance was captured.
+ */
+export function playSpeechEndBeep(): void {
+  const vol = getVolume() * 0.5
+  playToneAsync([
+    '-n', '-q',
+    'synth', '0.06', 'sine', '660',
+    'vol', String(vol),
+    'fade', 'q', '0.01', '-0', '0.01',
+  ], 'speech end beep')
+}
+
 // ─── Thinking Pulse ──────────────────────────────────────────
 
 /**

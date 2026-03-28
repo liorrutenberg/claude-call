@@ -282,6 +282,7 @@ export interface RecordOptions {
   silenceMode?: SilenceMode
   timeoutMs?: number
   onSpeechStart?: () => void
+  onSpeechEnd?: () => void
   onPreview?: (wavPath: string) => Promise<void> | void
   previewIntervalMs?: number
   previewWindowS?: number
@@ -336,6 +337,7 @@ export async function recordUtterance(
   const previewWindowS = options.previewWindowS ?? 5
   const onPreview = options.onPreview
   const onSpeechStart = options.onSpeechStart
+  const onSpeechEnd = options.onSpeechEnd
 
   return new Promise<string | null>((resolve, reject) => {
     let consecutiveSilent = 0
@@ -479,6 +481,7 @@ export async function recordUtterance(
             }
 
             if (hasSpeechDetected && consecutiveSilent >= silenceChunksNeeded) {
+              onSpeechEnd?.()
               finish()
               return
             }

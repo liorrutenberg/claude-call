@@ -38,6 +38,8 @@ import {
 import {
   playStartChime,
   playPauseChime,
+  playSpeechStartBeep,
+  playSpeechEndBeep,
   startThinkingPulse,
   stopThinkingPulse,
 } from './voice/feedback.js'
@@ -428,8 +430,13 @@ async function voiceLoop(): Promise<void> {
         silenceMode: config.silence.mode,
         onSpeechStart: () => {
           log('speech detected — listening...')
+          playSpeechStartBeep()
           partialText = ''
           stableText = ''
+        },
+        onSpeechEnd: () => {
+          log('speech ended — captured')
+          playSpeechEndBeep()
         },
         previewIntervalMs: 600,
         previewWindowS: 5,
