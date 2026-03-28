@@ -63,20 +63,10 @@ if [[ ! -f "$LOG" ]]; then
   exit 0
 fi
 
-# Find the message in the session log by UUID
-# The log is JSONL with lines like: {"type":"assistant","message":{...},"uuid":"..."}
-MESSAGE_LINE=$(grep "\"$UUID\"" "$LOG" | head -1)
-
-if [[ -z "$MESSAGE_LINE" ]]; then
-  # UUID not found in log — remove event and exit
-  { tail -n +2 "$EVENTS_FILE" 2>/dev/null || true; } > "$EVENTS_FILE.tmp"
-  mv -f "$EVENTS_FILE.tmp" "$EVENTS_FILE"
-  exit 0
-fi
-
-# Extract text content from the message
-# .message.content is an array; we want text elements only (skip thinking blocks, tool_use)
-CONTENT=$(echo "$MESSAGE_LINE" | jq -r '
+# Extract text content from the session log by UUID
+# Pipe grep directly to jq — storing in a bash variable mangles JSON with
+# embedded newlines/control chars, causing jq parse errors.
+CONTENT=$(grep "\"$UUID\"" "$LOG" | head -1 | jq -r '
   .message.content[]
   | select(.type == "text")
   | .text
