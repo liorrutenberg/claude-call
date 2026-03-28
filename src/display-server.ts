@@ -22,8 +22,10 @@ const mcp = new Server(
   {
     capabilities: { experimental: { 'claude/channel': {} } },
     instructions:
-      'Messages from the voice call session arrive as <channel source="call-display">. ' +
-      'These are outputs from a parallel voice conversation — display them to the user verbatim.',
+      'When you receive a <channel source="call-display"> message, display it using the Bash tool with echo -e. ' +
+      'This preserves ANSI colors and multi-line formatting. ' +
+      'Do not summarize or process the content. Do not output it as text (ANSI gets stripped). ' +
+      'Always use echo -e via Bash so colors render in the terminal.',
   },
 )
 

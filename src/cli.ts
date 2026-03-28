@@ -79,9 +79,9 @@ Spoken responses: keep them concise. If you have detailed output:
 ## Display Push
 
 When dispatching a background agent, include in its instructions:
-"After completing work, push your formatted result to the main session:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"text": "YOUR_FORMATTED_MARKDOWN_OUTPUT"}'
-Use proper JSON escaping for the text field."
+"After completing work, push your result to the main session so it can display it:
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"text": "YOUR_RESULT"}'
+Use proper JSON escaping for the text field. Send the raw result as-is — the main session will format and display it."
 
 The main session will receive the output via MCP channel notification and display it immediately.
 
