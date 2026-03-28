@@ -4,9 +4,11 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/liorrutenberg/claude-call)
 
-Continuous two-way voice conversations for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+Voice companion for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
-Talk to Claude hands-free. Claude talks back. Your terminal stays free for typing. No push-to-talk, no cloud STT, fully local speech processing.
+Talk to Claude hands-free while your terminal stays free for typing. Voice runs in a headless background session — it listens, responds via TTS, and dispatches background agents for heavy work. Results get pushed to your main screen so you never waste context — side lookups, checks, and research happen in the voice session, and only what matters gets injected into your main session.
+
+No push-to-talk, no cloud STT, fully local speech processing.
 
 ## How It Works
 
@@ -34,7 +36,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
 - **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
-- **Audio feedback** — Thinking pulse (waiting for response), start/resume chime, pause chime — so you always know the system state
+- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/resume chime, pause chime — so you always know the system state
 
 ### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
@@ -83,6 +85,20 @@ claude-call setup
 Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, and creates `/call-start` and `/call-stop` slash commands.
 
 ### Start a Voice Call
+
+**Option A: Launcher scripts (recommended)**
+
+Add `~/.claude-call/bin` to your PATH, then:
+
+```bash
+eld       # Claude + voice (like cld)
+eldc      # Claude + voice, continue last conversation
+eldr      # Claude + voice, resume last conversation
+```
+
+Voice starts automatically and stops when you exit. No manual cleanup needed.
+
+**Option B: Manual control**
 
 Start Claude Code with the display channel enabled:
 
@@ -201,6 +217,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 │                                 │
 │  Audio Feedback                 │
 │  ┌───────────────────────────┐  │
+│  │ Speech start/end beeps    │  │
 │  │ Thinking pulse (waiting)  │  │
 │  │ Start / resume chime      │  │
 │  │ Pause chime               │  │
