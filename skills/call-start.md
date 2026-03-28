@@ -8,25 +8,26 @@ claude-call call start
 
 ## Step 2: Start the event watcher
 
-After the call starts successfully, launch a background agent to watch for events from the call session.
+After the call starts successfully, launch a background agent with `run_in_background: true`.
 
-The agent should run this bash loop:
+The agent's instructions:
 
-```bash
-PROJECT_ROOT="$(pwd)"
-SCRIPT="$HOME/.claude-call/app/scripts/process-events.sh"
-while claude-call call status 2>&1 | grep -q "running"; do
-  OUTPUT=$("$SCRIPT" "$PROJECT_ROOT" 2>/dev/null)
-  if [ -n "$OUTPUT" ]; then
-    echo "$OUTPUT"
-  fi
-  sleep 3
-done
-```
+> You are a watcher that polls for voice call events every 3 seconds.
+>
+> **Loop** (repeat until the call session stops):
+>
+> 1. Run: `claude-call call status 2>&1`
+>    - If it does NOT contain "running", stop looping — the call ended.
+> 2. Run: `$HOME/.claude-call/app/scripts/process-events.sh PROJECT_ROOT 2>/dev/null`
+>    - Replace PROJECT_ROOT with: PROJECT_ROOT_VALUE
+>    - If the output is non-empty, display it to the user exactly as-is.
+> 3. Run: `sleep 3` (wait before next check)
+>
+> **Important**: Run each step as a SEPARATE Bash tool call. Do NOT combine them into a single long-running Bash command — you need to see the output of each call to decide what to do next.
+>
+> Keep looping until the call session is no longer running.
 
-When the script outputs content (non-empty), the agent should display it to the user and then continue the loop.
-
-Run this agent with `run_in_background: true`.
+Replace `PROJECT_ROOT_VALUE` with the actual working directory when launching the agent.
 
 ## Response
 
