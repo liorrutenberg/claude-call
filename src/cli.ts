@@ -1036,6 +1036,19 @@ async function uninstall(): Promise<void> {
   }
   writeln()
 
+  // Global MCP entry
+  writeln(`  \x1b[31m-\x1b[0m ~/.claude.json mcpServers.call-display`)
+  writeln(`    Global MCP server entry`)
+
+  // Installed dependencies
+  writeln()
+  writeln('\x1b[33mManual step:\x1b[0m Remove installed dependencies if no longer needed:')
+  writeln('  brew uninstall sox whisper-cpp')
+  writeln('  pip uninstall piper-tts edge-tts')
+  writeln('  # Qwen3-TTS daemon (if installed separately)')
+  writeln('  # Silero VAD model + Piper/Whisper models are inside ~/.claude-call/')
+  writeln()
+
   // PATH notice
   const pathLine = 'export PATH="$HOME/.claude-call/bin:$PATH"'
   writeln('\x1b[33mManual step:\x1b[0m Remove this line from your shell config (.zshrc / .bashrc):')
