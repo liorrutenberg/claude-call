@@ -214,7 +214,7 @@ These target different sessions (call vs main) via different mechanisms. Both us
 ### Voice Isolation
 
 The voice MCP server is never loaded in the main session. Instead:
-1. `claude-call setup` installs deps, downloads models, creates `/call-start` and `/call-stop` commands, and adds `call-display` MCP to the project `.mcp.json`
+1. `claude-call install` installs deps, downloads models, and creates `/call-start` and `/call-stop` commands. `claude-call init` adds `call-display` MCP to the project `.mcp.json`.
 2. `/call-start` runs `claude-call call start`, which spawns a headless claude with a per-run MCP config
 3. The per-run MCP config includes only the voice server
 4. The main session's `.mcp.json` includes `call-display` (display push) but not voice

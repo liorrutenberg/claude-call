@@ -30,4 +30,4 @@
   - Stale data files, old configs
   - `.claude/` leftovers from previous call iterations
 - Clean up old brew-installed models/binaries from earlier iterations
-- Verify clean `claude-call setup` works from scratch after cleanup
+- Verify clean `claude-call install` works from scratch after cleanup

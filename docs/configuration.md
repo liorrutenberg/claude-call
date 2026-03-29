@@ -123,7 +123,7 @@ Server mode reduces transcription latency from ~1100ms (CLI, model load each tim
 In `auto` mode, claude-call tries engines in order:
 
 1. **Piper** — Local ONNX model, ~100ms latency, offline. Needs `piper` binary + model.
-2. **Qwen3-TTS** — Best quality, fully local GPU inference. Opt-in: requires a separately running daemon (not installed by setup). Silently skipped when server isn't reachable.
+2. **Qwen3-TTS** — Best quality, fully local GPU inference. Opt-in: requires a separately running daemon (not installed by `claude-call install`). Silently skipped when server isn't reachable.
 3. **edge-tts** — Microsoft neural voices, free, high quality. Needs `edge-tts` CLI + internet.
 4. **say** — macOS built-in. Always available, robotic but reliable.
 

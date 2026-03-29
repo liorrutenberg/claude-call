@@ -149,7 +149,7 @@ These target different sessions (call vs main) via different mechanisms. Both us
 | # | Task | Status | What |
 |---|------|--------|------|
 | 10 | call-display MCP server | Done | `src/display-server.ts` — HTTP `POST /display` + `GET /health` on port 9847 → `notifications/claude/channel` push. |
-| 11 | Setup: install + configure display MCP | Done | `claude-call setup` copies display-server.js, adds `call-display` entry to `.mcp.json`. |
+| 11 | Setup: install + configure display MCP | Done | `claude-call install` installs globally; `claude-call init` adds `call-display` entry to `.mcp.json`. |
 | 12 | Update prompt + remove event pointer system | Done | Prompt uses curl template for agents. Removed `getEventsPath()`, events.jsonl init, `process-events.sh`. |
 | 13 | Update skills | Done | call-start: health check replaces watcher agent. call-stop: clean. |
 | 14 | Update docs | Done | All docs updated with display-push architecture. |
@@ -165,5 +165,5 @@ These target different sessions (call vs main) via different mechanisms. Both us
 | Duplicate `/call-start` races | Atomic lock file (task 1) |
 | Main session accidentally loads voice | Per-run MCP config, voice only in call process (task 3) |
 | Display port 9847 conflict | Configurable port in config.yaml, fail-fast on EADDRINUSE |
-| Channel flag forgotten on session start | `claude-call setup` prints reminder; call-start skill checks MCP status |
+| Channel flag forgotten on session start | `claude-call install` prints reminder; call-start skill checks MCP status |
 | Channel notification costs main session tokens | Acceptable trade-off: real-time push, no polling overhead |

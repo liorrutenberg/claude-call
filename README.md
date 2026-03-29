@@ -281,6 +281,11 @@ claude-call init        # Per-project setup (.mcp.json)
 claude-call uninstall   # Remove everything (--dry-run to preview)
 claude-call check       # Verify dependencies and models
 claude-call serve       # Start MCP server (used by Claude Code)
+claude-call call start  # Start a voice call session
+claude-call call stop   # Stop the current call session
+claude-call call pause  # Pause the call session
+claude-call call resume # Resume a paused call session
+claude-call call status # Show call session status
 ```
 
 ## Credits
