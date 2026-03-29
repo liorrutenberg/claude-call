@@ -158,7 +158,11 @@ function startListening(retry = false): void {
   })
 }
 
-startListening()
+// Only start HTTP listener in eld sessions (CLAUDE_CALL=1).
+// Other sessions run MCP-only — no port conflict, no killing valid display servers.
+if (process.env.CLAUDE_CALL === '1') {
+  startListening()
+}
 
 // ─── MCP stdio transport ────────────────────────────────────
 

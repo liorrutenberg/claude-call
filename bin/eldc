@@ -4,4 +4,4 @@
 
 claude-call call start 2>/dev/null
 trap "claude-call call stop 2>/dev/null" EXIT INT TERM
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display --continue "$@"
+CLAUDE_CALL=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display --continue "$@"
