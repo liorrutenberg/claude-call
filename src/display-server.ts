@@ -12,8 +12,67 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js' // eslint-disable-line deprecation/deprecation
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { loadConfig } from './config.js'
 
 const PORT = 9847
+
+// ─── Agent Tracking ─────────────────────────────────────────
+
+const VALID_EVENTS = ['dispatch', 'complete'] as const
+
+/**
+ * Find the active run directory by scanning runs/ for a valid lock.
+ * Scans on every call (cheap operation).
+ */
+function resolveActiveRunDir(): string | null {
+  const runsDir = join(loadConfig().dataDir, 'runs')
+  if (!existsSync(runsDir)) return null
+
+  try {
+    for (const entry of readdirSync(runsDir)) {
+      const runDir = join(runsDir, entry)
+      const lockPath = join(runDir, 'lock')
+      if (existsSync(lockPath)) {
+        try {
+          const pid = parseInt(readFileSync(lockPath, 'utf-8').trim(), 10)
+          process.kill(pid, 0) // Throws if process doesn't exist
+          return runDir
+        } catch {
+          // Lock stale or process dead
+        }
+      }
+    }
+  } catch {
+    // Can't read runs dir
+  }
+  return null
+}
+
+/**
+ * Write an agent event to agents.jsonl in the run directory.
+ * Best-effort — failures are silently ignored.
+ */
+function writeAgentEvent(agent: unknown): void {
+  if (!agent || typeof agent !== 'object') return
+
+  const { event, name, ts, summary } = agent as Record<string, unknown>
+  if (typeof event !== 'string' || typeof name !== 'string' || typeof ts !== 'string') return
+  if (!VALID_EVENTS.includes(event as typeof VALID_EVENTS[number])) return
+
+  const runDir = resolveActiveRunDir()
+  if (!runDir) return
+
+  const eventObj: Record<string, string> = { event, name, ts }
+  if (typeof summary === 'string') eventObj.summary = summary
+
+  try {
+    appendFileSync(join(runDir, 'agents.jsonl'), JSON.stringify(eventObj) + '\n')
+  } catch {
+    // Best-effort
+  }
+}
 
 // ─── MCP Server ─────────────────────────────────────────────
 
@@ -53,8 +112,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     }
 
     try {
-      const { text } = JSON.parse(body)
+      const { text, agent } = JSON.parse(body)
+
+      // Write agent event if present (best-effort)
+      writeAgentEvent(agent)
+
+      // Allow agent-only POSTs (no text field required)
       if (typeof text !== 'string' || !text) {
+        if (agent) {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: true }))
+          return
+        }
         res.writeHead(400, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'missing text field' }))
         return

@@ -90,9 +90,15 @@ Spoken responses: keep them concise. If you have detailed output:
 ## Display Push
 
 When dispatching a background agent, include in its instructions:
-"After completing work, push your result to the main session so it can display it:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"text": "YOUR_RESULT"}'
-Use proper JSON escaping for the text field. Send the raw result as-is — the main session will format and display it."
+"After completing work, push your result to the main session:
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{
+  "text": "YOUR_RESULT",
+  "agent": {"event": "complete", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP", "summary": "1-sentence summary"}
+}'
+Use proper JSON escaping. Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth'). Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ."
+
+Optionally, POST a dispatch event before calling the Agent tool (helps the monitor show running status):
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"agent": {"event": "dispatch", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP"}}'
 
 The main session will receive the output via MCP channel notification and display it immediately.
 
