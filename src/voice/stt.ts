@@ -106,7 +106,7 @@ export function getModelPath(): string {
   if (!cachedModel) {
     throw new Error(
       'No whisper model found.\n' +
-      'Run "claude-call setup" to download a model.'
+      'Run "claude-call install" to download a model.'
     )
   }
   return cachedModel

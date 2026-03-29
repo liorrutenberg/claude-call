@@ -73,7 +73,8 @@ else
 fi
 
 echo
-echo "Next: cd into your project and run:"
+echo "Next steps:"
 echo
-echo "  claude-call setup"
+echo "  claude-call install    # once, global"
+echo "  claude-call init       # per project"
 echo

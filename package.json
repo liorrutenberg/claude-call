@@ -18,7 +18,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "setup": "node dist/cli.js setup",
+    "install:call": "node dist/cli.js install",
+    "init": "node dist/cli.js init",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },

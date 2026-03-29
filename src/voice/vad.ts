@@ -50,7 +50,7 @@ function findModelPath(): string {
 
   throw new Error(
     `Silero VAD model not found at: ${modelPath}\n` +
-    'Run "claude-call setup" to download required models.'
+    'Run "claude-call install" to download required models.'
   )
 }
 
