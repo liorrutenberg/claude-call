@@ -24,6 +24,7 @@ import {
   getFifoPath,
   writeStatus,
   readStatus,
+  updateStatus,
   cleanupRunDir,
   ensureRunDir,
   type StatusFile,
@@ -100,8 +101,9 @@ curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json
 }'
 Use proper JSON escaping. Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth'). Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ."
 
-Optionally, POST a dispatch event before calling the Agent tool (helps the monitor show running status):
+ALWAYS POST a dispatch event before calling the Agent tool (so the monitor shows it running):
 curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"agent": {"event": "dispatch", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP"}}'
+Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ. Use a short descriptive name (e.g., 'sync', 'explore-auth').
 
 The main session will receive the output via MCP channel notification and display it immediately.
 
@@ -636,6 +638,7 @@ async function callPause(): Promise<void> {
   }
 
   setPauseSignalIn(runDir)
+  updateStatus(runDir, { status: 'paused' })
   writeln('Call session paused')
 }
 
@@ -655,6 +658,7 @@ async function callResume(): Promise<void> {
   }
 
   clearPauseSignalIn(runDir)
+  updateStatus(runDir, { status: 'running' })
   writeln('Call session resumed')
 }
 

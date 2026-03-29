@@ -144,6 +144,8 @@ async function waitForUnpause(): Promise<void> {
         if (matchesUnpause(raw)) {
           softPaused = false
           log('unpaused by voice command')
+          const resumeRunDir = getRunDirFromEnv()
+          if (resumeRunDir) updateStatus(resumeRunDir, { status: 'running' })
           kwMonitor.stop()
           resolve()
         }
@@ -510,6 +512,8 @@ async function voiceLoop(): Promise<void> {
         softPaused = true
         playPauseChime()
         log(`soft pause triggered: "${text}"`)
+        const pauseRunDir = getRunDirFromEnv()
+        if (pauseRunDir) updateStatus(pauseRunDir, { status: 'paused' })
         try {
           await deliver('[Voice paused — say "exo start" to resume]')
         } catch { /* ignore */ }
