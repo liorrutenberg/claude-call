@@ -12,43 +12,15 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js' // eslint-disable-line deprecation/deprecation
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { appendFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig } from './config.js'
+import { resolveActiveRunDir } from './runtime.js'
 
 const PORT = 9847
 
 // ─── Agent Tracking ─────────────────────────────────────────
 
 const VALID_EVENTS = ['dispatch', 'complete'] as const
-
-/**
- * Find the active run directory by scanning runs/ for a valid lock.
- * Scans on every call (cheap operation).
- */
-function resolveActiveRunDir(): string | null {
-  const runsDir = join(loadConfig().dataDir, 'runs')
-  if (!existsSync(runsDir)) return null
-
-  try {
-    for (const entry of readdirSync(runsDir)) {
-      const runDir = join(runsDir, entry)
-      const lockPath = join(runDir, 'lock')
-      if (existsSync(lockPath)) {
-        try {
-          const pid = parseInt(readFileSync(lockPath, 'utf-8').trim(), 10)
-          process.kill(pid, 0) // Throws if process doesn't exist
-          return runDir
-        } catch {
-          // Lock stale or process dead
-        }
-      }
-    }
-  } catch {
-    // Can't read runs dir
-  }
-  return null
-}
 
 /**
  * Write an agent event to agents.jsonl in the run directory.

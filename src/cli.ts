@@ -22,17 +22,20 @@ import { MODELS, downloadWithProgress, isModelDownloaded } from './setup/models.
 import {
   getRunDir,
   getFifoPath,
-  acquireLock,
-  releaseLock,
-  getLockHolder,
   writeStatus,
   readStatus,
   cleanupRunDir,
   ensureRunDir,
   type StatusFile,
+  type VoiceLock,
   setPauseSignalIn,
   clearPauseSignalIn,
   hasPauseSignalIn,
+  acquireVoiceLock,
+  releaseVoiceLock,
+  updateVoiceLockPid,
+  resolveActiveRunDir,
+  resolveActiveSession,
 } from './runtime.js'
 import { initWorkspace } from './workspace.js'
 
@@ -367,36 +370,31 @@ function addDisplayMcpConfig(projectRoot: string): void {
 async function callStart(): Promise<void> {
   // 1. Determine project root
   const projectRoot = findProjectRoot() ?? process.cwd()
+  const sessionId = randomUUID()
 
-  // 2. Check ALL run dirs — only one voice session allowed globally (mic is shared)
-  const runsDir = join(loadConfig().dataDir, 'runs')
-  if (existsSync(runsDir)) {
-    for (const entry of readdirSync(runsDir)) {
-      const existingRunDir = join(runsDir, entry)
-      const existingHolder = getLockHolder(existingRunDir)
-      if (existingHolder !== null) {
-        const existingStatus = readStatus(existingRunDir)
-        const project = existingStatus?.projectRoot ?? 'unknown'
-        writeln(`Call session already running (PID ${existingHolder}, project: ${project})`)
-        writeln('Only one voice session can be active at a time (shared mic).')
-        writeln('Stop it first: claude-call call stop')
-        process.exit(1)
-      }
-    }
-  }
-
-  // 3. Get run dir and ensure it exists
+  // 2. Get run dir and ensure it exists
   const runDir = getRunDir(projectRoot)
   ensureRunDir(runDir)
 
-  // 4. Acquire lock
-  const lockHolder = getLockHolder(runDir)
-  if (lockHolder !== null) {
-    writeln(`Call session already running (PID ${lockHolder})`)
+  // 3. Acquire global voice lock (only one voice session allowed — mic is shared)
+  const voiceLock: VoiceLock = {
+    runDir,
+    projectRoot,
+    pid: process.pid,
+    sessionId,
+    startedAt: new Date().toISOString(),
+  }
+
+  const existingSession = resolveActiveSession()
+  if (existingSession !== null) {
+    writeln(`Call session already running (PID ${existingSession.pid}, project: ${existingSession.projectRoot})`)
+    writeln('Only one voice session can be active at a time (shared mic).')
+    writeln('Stop it first: claude-call call stop')
     process.exit(1)
   }
-  if (!acquireLock(runDir, process.pid)) {
-    writeln('Failed to acquire lock')
+
+  if (!acquireVoiceLock(voiceLock)) {
+    writeln('Failed to acquire voice lock')
     process.exit(1)
   }
 
@@ -447,12 +445,9 @@ async function callStart(): Promise<void> {
     claudeProc.unref()
     claudePid = claudeProc.pid!
 
-    const sessionId = randomUUID()
-
-    // 9. Update lock to claude PID (so lock stays valid after launcher exits)
-    releaseLock(runDir, process.pid)
-    if (!acquireLock(runDir, claudePid)) {
-      throw new Error('Failed to acquire lock with claude PID')
+    // 9. Update voice lock PID to claude (so lock stays valid after launcher exits)
+    if (!updateVoiceLockPid(process.pid, claudePid)) {
+      throw new Error('Failed to update voice lock with claude PID')
     }
 
     // 10. Write status.json
@@ -460,7 +455,7 @@ async function callStart(): Promise<void> {
       status: 'running',
       callPid: fifoWriterPid,
       claudePid,
-      startedAt: new Date().toISOString(),
+      startedAt: voiceLock.startedAt,
       projectRoot,
       sessionId,
     }
@@ -500,9 +495,9 @@ async function callStart(): Promise<void> {
     if (fifoWriterPid && isProcessAlive(fifoWriterPid)) {
       try { process.kill(fifoWriterPid, 'SIGKILL') } catch { /* ignore */ }
     }
-    // Release lock (try both PIDs in case we're in a transitional state)
-    releaseLock(runDir, process.pid)
-    if (claudePid) releaseLock(runDir, claudePid)
+    // Release voice lock (try both PIDs in case we're in a transitional state)
+    releaseVoiceLock(process.pid)
+    if (claudePid) releaseVoiceLock(claudePid)
     cleanupRunDir(runDir)
     throw err
   }
@@ -543,30 +538,34 @@ function waitForProcessExit(pid: number, timeoutMs: number): void {
  * Stop a call session.
  */
 async function callStop(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  // 1. Read status
-  const status = readStatus(runDir)
-  if (!status) {
+  // 1. Resolve active session from global voice lock
+  const session = resolveActiveSession()
+  if (!session) {
     writeln('No call session running')
     return
   }
 
-  // 2. Kill claude process and FIFO writer, waiting for exit
-  waitForProcessExit(status.claudePid, 5000)
-  waitForProcessExit(status.callPid, 2000)
+  const runDir = session.runDir
 
-  // 3. Release lock (using the PID that holds it)
-  const lockHolder = getLockHolder(runDir)
-  if (lockHolder !== null) {
-    releaseLock(runDir, lockHolder)
+  // 2. Read status for process PIDs
+  const status = readStatus(runDir)
+  if (status) {
+    // 3. Kill claude process and FIFO writer, waiting for exit
+    waitForProcessExit(status.claudePid, 5000)
+    waitForProcessExit(status.callPid, 2000)
+  } else {
+    // Status missing but lock exists - try killing the lock holder PID
+    // (this covers race where stop is called before status.json is written)
+    waitForProcessExit(session.pid, 5000)
   }
 
-  // 4. Clean up run dir
+  // 4. Release voice lock
+  releaseVoiceLock(session.pid)
+
+  // 5. Clean up run dir
   cleanupRunDir(runDir)
 
-  // 5. Print status
+  // 6. Print status
   writeln('Call session stopped')
 }
 
@@ -574,11 +573,8 @@ async function callStop(): Promise<void> {
  * Pause a call session (mic stays alive, stops processing).
  */
 async function callPause(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -596,11 +592,8 @@ async function callPause(): Promise<void> {
  * Resume a paused call session.
  */
 async function callResume(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -618,11 +611,8 @@ async function callResume(): Promise<void> {
  * Enable wake word prefix — user must say "exo" before each command.
  */
 async function callPrefixOn(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -638,11 +628,8 @@ async function callPrefixOn(): Promise<void> {
  * Disable wake word prefix — all speech is processed directly.
  */
 async function callPrefixOff(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -659,22 +646,31 @@ async function callPrefixOff(): Promise<void> {
  * Show call session status.
  */
 async function callStatus(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  // 1. Read status
-  const status = readStatus(runDir)
-  if (!status) {
+  // 1. Check global voice lock for active session
+  const session = resolveActiveSession()
+  if (!session) {
     writeln('Status: stopped')
     writeln('No active call session')
     return
   }
 
-  // 2. Check if processes are alive
+  const runDir = session.runDir
+
+  // 2. Read status file for process details
+  const status = readStatus(runDir)
+  if (!status) {
+    // Voice lock exists but status file missing - unusual state
+    writeln('Status: unknown')
+    writeln(`Session PID: ${session.pid}`)
+    writeln(`Project: ${session.projectRoot}`)
+    return
+  }
+
+  // 3. Check if processes are alive
   const claudeAlive = isProcessAlive(status.claudePid)
   const writerAlive = isProcessAlive(status.callPid)
 
-  // 3. Determine actual status
+  // 4. Determine actual status
   let actualStatus: string
   if (claudeAlive && writerAlive) {
     actualStatus = 'running'
@@ -684,7 +680,7 @@ async function callStatus(): Promise<void> {
     actualStatus = 'crashed (partial)'
   }
 
-  // 4. Print status
+  // 5. Print status
   writeln(`Status: ${actualStatus}`)
   writeln(`Claude PID: ${status.claudePid}${claudeAlive ? '' : ' (dead)'}`)
   writeln(`Writer PID: ${status.callPid}${writerAlive ? '' : ' (dead)'}`)

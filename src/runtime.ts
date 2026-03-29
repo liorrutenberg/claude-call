@@ -35,6 +35,18 @@ export interface StatusFile {
   sessionId: string
 }
 
+/**
+ * Global voice lock structure.
+ * Only one voice session can be active at a time (mic is shared).
+ */
+export interface VoiceLock {
+  runDir: string
+  projectRoot: string
+  pid: number
+  sessionId: string
+  startedAt: string
+}
+
 // ─── Path helpers ───────────────────────────────────────────
 
 /**
@@ -273,6 +285,172 @@ export function getLockHolder(runDir: string): number | null {
     return pid
   }
   return null
+}
+
+// ─── Global voice lock ──────────────────────────────────────
+
+/**
+ * Get the path to the global voice lock file.
+ * Only one voice session can be active at a time (mic is shared).
+ */
+export function getVoiceLockPath(): string {
+  return join(loadConfig().dataDir, 'voice.lock')
+}
+
+/**
+ * Read the global voice lock file.
+ * @returns VoiceLock if valid lock exists with live process, null otherwise
+ */
+export function readVoiceLock(): VoiceLock | null {
+  const lockPath = getVoiceLockPath()
+  try {
+    const content = readFileSync(lockPath, 'utf-8')
+    const lock = JSON.parse(content) as VoiceLock
+    // Validate required fields
+    if (!lock.runDir || !lock.pid || !lock.sessionId) {
+      return null
+    }
+    // Check if process is alive
+    if (!isProcessAlive(lock.pid)) {
+      return null
+    }
+    return lock
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Write the global voice lock file atomically.
+ */
+function writeVoiceLock(lock: VoiceLock): void {
+  const lockPath = getVoiceLockPath()
+  const tempPath = `${lockPath}.tmp.${process.pid}`
+  writeFileSync(tempPath, JSON.stringify(lock, null, 2))
+  renameSync(tempPath, lockPath)
+}
+
+/**
+ * Acquire the global voice lock.
+ * Uses atomic O_CREAT|O_EXCL pattern with stale lock cleanup.
+ *
+ * @param lock - The lock data to write
+ * @returns true if lock acquired, false if another live session holds it
+ */
+export function acquireVoiceLock(lock: VoiceLock): boolean {
+  const lockPath = getVoiceLockPath()
+
+  // Ensure data dir exists
+  const dataDir = loadConfig().dataDir
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true })
+  }
+
+  // First attempt: try to create lock atomically
+  const tryCreate = (): boolean => {
+    try {
+      const fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY)
+      writeFileSync(fd, JSON.stringify(lock, null, 2))
+      closeSync(fd)
+      return true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        return false
+      }
+      throw err
+    }
+  }
+
+  if (tryCreate()) {
+    return true
+  }
+
+  // Lock exists - check if stale
+  const existingLock = readVoiceLock()
+  if (existingLock !== null) {
+    // Lock is held by a live process
+    return false
+  }
+
+  // Stale lock - remove and retry once
+  try {
+    unlinkSync(lockPath)
+  } catch {
+    // Another process may have removed it, continue to retry
+  }
+
+  return tryCreate()
+}
+
+/**
+ * Release the global voice lock.
+ * Only releases if the lock's PID matches exactly.
+ *
+ * @param pid - The PID that should own the lock
+ */
+export function releaseVoiceLock(pid: number): void {
+  const lockPath = getVoiceLockPath()
+  try {
+    // Read raw content to check ownership without process liveness check
+    const content = readFileSync(lockPath, 'utf-8')
+    const lock = JSON.parse(content) as VoiceLock
+    // Only delete if we positively own this lock
+    if (lock.pid === pid) {
+      unlinkSync(lockPath)
+    }
+  } catch {
+    // File doesn't exist or invalid - nothing to release
+  }
+}
+
+/**
+ * Update the PID in the global voice lock.
+ * Used when transferring ownership from launcher to claude process.
+ *
+ * @param oldPid - The current owner's PID
+ * @param newPid - The new owner's PID
+ * @returns true if updated, false if lock not found or wrong owner
+ */
+export function updateVoiceLockPid(oldPid: number, newPid: number): boolean {
+  const lock = readVoiceLock()
+  // Allow update even if oldPid is dead (stale lock cleanup case)
+  if (lock === null) {
+    // Try reading raw content to get lock even if process died
+    const lockPath = getVoiceLockPath()
+    try {
+      const content = readFileSync(lockPath, 'utf-8')
+      const rawLock = JSON.parse(content) as VoiceLock
+      if (rawLock.pid === oldPid) {
+        writeVoiceLock({ ...rawLock, pid: newPid })
+        return true
+      }
+    } catch {
+      return false
+    }
+    return false
+  }
+  if (lock.pid !== oldPid) {
+    return false
+  }
+  writeVoiceLock({ ...lock, pid: newPid })
+  return true
+}
+
+/**
+ * Get the active session's run directory from the global voice lock.
+ * @returns runDir if active session exists, null otherwise
+ */
+export function resolveActiveRunDir(): string | null {
+  const lock = readVoiceLock()
+  return lock?.runDir ?? null
+}
+
+/**
+ * Get the active session info from the global voice lock.
+ * @returns VoiceLock if active session exists, null otherwise
+ */
+export function resolveActiveSession(): VoiceLock | null {
+  return readVoiceLock()
 }
 
 // ─── Status file management ─────────────────────────────────

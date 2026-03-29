@@ -1,0 +1,11 @@
+[
+    {"step": "Add global voice.lock types and functions to runtime.ts", "done": true},
+    {"step": "Update callStart to acquire voice.lock atomically", "done": true},
+    {"step": "Update callStop/pause/resume/status/prefix to resolve from voice.lock", "done": true},
+    {"step": "Update display-server.ts resolveActiveRunDir to read voice.lock", "done": true},
+    {"step": "Remove scan-all-run-dirs code from callStart", "done": true},
+    {"step": "Run build and verify", "done": true},
+    {"step": "Run ask-codex on diff", "done": true},
+    {"step": "Fix issues found by ask-codex", "done": true},
+    {"step": "Commit changes", "done": true}
+]
