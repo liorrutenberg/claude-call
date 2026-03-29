@@ -96,7 +96,9 @@ eldc      # Claude + voice, continue last conversation
 eldr      # Claude + voice, resume last conversation
 ```
 
-Voice starts automatically and stops when you exit. No manual cleanup needed.
+Voice starts automatically and stops when you exit Claude. No manual cleanup needed.
+
+> **Note:** If the wrapper shell itself is force-killed (`kill -9` on the shell PID) or the terminal app crashes, the cleanup trap can't fire. Run `claude-call call stop` from the same project directory to clean up the orphaned voice session. Normal exits (Ctrl+C, `/exit`, closing the terminal window) are handled automatically.
 
 **Option B: Manual control**
 
