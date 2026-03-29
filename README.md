@@ -76,13 +76,14 @@ curl -fsSL https://raw.githubusercontent.com/liorrutenberg/claude-call/main/inst
 
 ### Setup
 
-Run from your project directory:
-
 ```bash
-claude-call setup
+claude-call install    # once — deps, models, skills, PATH
+claude-call init       # per project — .mcp.json for display channel
 ```
 
-Setup installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server in the background for faster transcription, writes config, and creates `/call-start` and `/call-stop` slash commands.
+`install` installs all dependencies (sox, whisper-cpp, piper, edge-tts), downloads models (Silero VAD, Whisper large-v3-turbo, Piper voice), starts a whisper-server, writes config, and installs `/call-start` and `/call-stop` slash commands.
+
+`init` configures the current project for voice calls (adds the display channel MCP entry to `.mcp.json`).
 
 ### Start a Voice Call
 
@@ -96,7 +97,9 @@ eldc      # Claude + voice, continue last conversation
 eldr      # Claude + voice, resume last conversation
 ```
 
-Voice starts automatically and stops when you exit. No manual cleanup needed.
+Voice starts automatically and stops when you exit Claude. No manual cleanup needed.
+
+> **Note:** If the wrapper shell itself is force-killed (`kill -9` on the shell PID) or the terminal app crashes, the cleanup trap can't fire. Run `claude-call call stop` from the same project directory to clean up the orphaned voice session. Normal exits (Ctrl+C, `/exit`, closing the terminal window) are handled automatically.
 
 **Option B: Manual control**
 
@@ -120,7 +123,7 @@ Stop the call with:
 /call-stop
 ```
 
-> **Multiple projects?** Run `claude-call setup` from each project directory. It adds the slash commands to whichever project you run it from.
+> **Multiple projects?** Run `claude-call init` from each project directory.
 
 ## Voice Commands
 
@@ -260,7 +263,7 @@ pronunciation:
 
 ## Qwen3-TTS (Optional)
 
-Qwen3 is tier 2 in the TTS cascade but **disabled by default** — it requires a separate GPU daemon that is not installed or started by `claude-call setup`.
+Qwen3 is tier 2 in the TTS cascade but **disabled by default** — it requires a separate GPU daemon that is not installed or started by `claude-call install`.
 
 When the Qwen3 server isn't running, it's silently skipped and the cascade falls through: Piper → edge-tts → say.
 
@@ -273,9 +276,16 @@ To enable:
 ## CLI Commands
 
 ```bash
-claude-call setup   # Interactive first-run setup
-claude-call check   # Verify dependencies and models
-claude-call serve   # Start MCP server (used by Claude Code)
+claude-call install     # Global setup (deps, models, skills, PATH)
+claude-call init        # Per-project setup (.mcp.json)
+claude-call uninstall   # Remove everything (--dry-run to preview)
+claude-call check       # Verify dependencies and models
+claude-call serve       # Start MCP server (used by Claude Code)
+claude-call call start  # Start a voice call session
+claude-call call stop   # Stop the current call session
+claude-call call pause  # Pause the call session
+claude-call call resume # Resume a paused call session
+claude-call call status # Show call session status
 ```
 
 ## Credits

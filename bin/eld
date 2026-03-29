@@ -2,6 +2,15 @@
 # eld — Claude Code with voice call session
 # Equivalent to cld (claude --dangerously-skip-permissions) + voice
 
-claude-call call start 2>/dev/null
-trap "claude-call call stop 2>/dev/null" EXIT INT TERM
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display "$@"
+# Take over any existing session
+claude-call call stop 2>/dev/null
+
+OUTPUT=$(claude-call call start 2>&1)
+echo "$OUTPUT"
+if ! echo "$OUTPUT" | grep -q 'PID'; then
+  echo "Failed to start call session"
+  exit 1
+fi
+PID=$(echo "$OUTPUT" | grep -o 'PID [0-9]*' | grep -o '[0-9]*')
+trap "claude-call call stop --if-pid $PID 2>/dev/null" EXIT INT TERM
+CLAUDE_CALL=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display "$@"

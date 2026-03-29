@@ -3,12 +3,13 @@
  * CLI entry point for claude-call.
  *
  * Commands:
- *   setup  — Interactive first-run setup (deps, models, config)
+ *   install — Global setup (deps, models, config)
+ *   init    — Per-project setup (.mcp.json)
  *   check  — Verify everything works
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, cpSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
@@ -21,17 +22,21 @@ import { MODELS, downloadWithProgress, isModelDownloaded } from './setup/models.
 import {
   getRunDir,
   getFifoPath,
-  acquireLock,
-  releaseLock,
-  getLockHolder,
   writeStatus,
   readStatus,
+  updateStatus,
   cleanupRunDir,
   ensureRunDir,
   type StatusFile,
+  type VoiceLock,
   setPauseSignalIn,
   clearPauseSignalIn,
   hasPauseSignalIn,
+  acquireVoiceLock,
+  releaseVoiceLock,
+  updateVoiceLockPid,
+  resolveActiveRunDir,
+  resolveActiveSession,
 } from './runtime.js'
 import { initWorkspace } from './workspace.js'
 
@@ -58,9 +63,9 @@ If you don't speak() it or push it to the display, it didn't happen. Never outpu
 
 ## CRITICAL: Ack → Agent → Speak Pattern
 
-You MUST follow this pattern for ANY request requiring tool use:
+You MUST follow this pattern for ANY request requiring real work:
 1. **Ack by echoing intent** (1 sentence): Say WHAT you're about to do, not just "got it"
-2. **Dispatch Agent** with \`run_in_background: true\` — NEVER do the work inline
+2. **Dispatch Agent** with \`run_in_background: true\` — do the work in background
 3. **When agent returns**, speak the result in 2-3 sentences max
 
 Examples:
@@ -70,7 +75,15 @@ Examples:
 - User: "Track that I need to call the dentist" → Speak: "Tracking the dentist call." → Agent creates trace → Speak: "Done, added it."
 
 Always echo back the specific action so the user knows you understood correctly. NEVER use generic acks like "got it" or "one sec" alone.
-NEVER answer inline if it requires reading files, searching, or multi-step work. Even simple lookups go to agents.
+
+## Tool Usage Rule
+
+Keep the voice loop responsive. Only these tools are allowed directly:
+- **speak** — how you talk to the user
+- **Agent** (with \`run_in_background: true\`) — how you do work
+- **Read** — one quick file read per request (e.g., checking a config value)
+
+Everything else (Write, Edit, Bash, Grep, Glob, WebSearch, etc.) MUST go through a background agent. If a request needs more than a spoken response and a single file read, dispatch an agent.
 
 ## Voice Brevity Rule
 
@@ -81,9 +94,16 @@ Spoken responses: keep them concise. If you have detailed output:
 ## Display Push
 
 When dispatching a background agent, include in its instructions:
-"After completing work, push your result to the main session so it can display it:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"text": "YOUR_RESULT"}'
-Use proper JSON escaping for the text field. Send the raw result as-is — the main session will format and display it."
+"After completing work, push your result to the main session:
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{
+  "text": "YOUR_RESULT",
+  "agent": {"event": "complete", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP", "summary": "1-sentence summary"}
+}'
+Use proper JSON escaping. Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth'). Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ."
+
+ALWAYS POST a dispatch event before calling the Agent tool (so the monitor shows it running):
+curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"agent": {"event": "dispatch", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP"}}'
+Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ. Use a short descriptive name (e.g., 'sync', 'explore-auth').
 
 The main session will receive the output via MCP channel notification and display it immediately.
 
@@ -100,7 +120,8 @@ Concise, conversational, no markdown. "Got it, running sync" not "I will now exe
 ## Don'ts
 
 - Never go silent without acking
-- Never do heavy work inline — always delegate
+- Never use Write, Edit, Bash, Grep, or Glob directly — always delegate to agents
+- Never do multi-step work inline — dispatch an agent
 - Never just say you'll push to display — actually include the curl in agent instructions`
 }
 
@@ -265,7 +286,7 @@ function formatUptime(startedAt: string): string {
 
 /**
  * Install skill files to ~/.claude/commands/ and the display server to the app dir.
- * Called at the end of setup to make /call-start, /call-stop, etc. available globally.
+ * Install skill files to ~/.claude/commands/ and launcher scripts to ~/.claude-call/bin/.
  */
 function installSkillsAndScripts(): void {
   // Determine the app root directory.
@@ -289,21 +310,35 @@ function installSkillsAndScripts(): void {
     writeln(`  \x1b[33mSkills directory not found at ${skillsSrc} — skipping skill install\x1b[0m`)
   }
 
-  // 2. Copy compiled display-server.js to ~/.claude-call/app/
-  const displayServerSrc = join(appRoot, 'dist', 'display-server.js')
-  const appDest = join(homedir(), '.claude-call', 'app')
-  mkdirSync(appDest, { recursive: true })
+  // 2. Copy compiled dist/ to ~/.claude-call/app/dist/ (includes cli, display-server, tui, etc.)
+  const distSrc = resolve(join(appRoot, 'dist'))
+  const distDest = resolve(join(homedir(), '.claude-call', 'app', 'dist'))
 
-  if (existsSync(displayServerSrc)) {
-    copyFileSync(displayServerSrc, join(appDest, 'display-server.js'))
-    writeln(`  Installed display-server.js → ${join(appDest, 'display-server.js')}`)
+  if (distSrc === distDest) {
+    writeln(`  dist/ already in place (running from installed location)`)
+  } else if (existsSync(distSrc)) {
+    cpSync(distSrc, distDest, { recursive: true, force: true })
+    writeln(`  Installed dist/ → ${distDest}`)
   } else {
-    writeln(`  \x1b[33mdisplay-server.js not found at ${displayServerSrc} — skipping\x1b[0m`)
+    writeln(`  \x1b[33mdist/ not found at ${distSrc} — skipping\x1b[0m`)
+  }
+
+  // 2b. Copy node_modules/ to ~/.claude-call/app/node_modules/ (runtime dependencies)
+  const nodeModulesSrc = resolve(join(appRoot, 'node_modules'))
+  const nodeModulesDest = resolve(join(homedir(), '.claude-call', 'app', 'node_modules'))
+
+  if (nodeModulesSrc === nodeModulesDest) {
+    writeln(`  node_modules/ already in place (running from installed location)`)
+  } else if (existsSync(nodeModulesSrc)) {
+    cpSync(nodeModulesSrc, nodeModulesDest, { recursive: true, force: true })
+    writeln(`  Installed node_modules/ → ${nodeModulesDest}`)
+  } else {
+    writeln(`  \x1b[33mnode_modules/ not found at ${nodeModulesSrc} — skipping\x1b[0m`)
   }
 
   // 3. Install launcher scripts (eld, eldc, eldr) to ~/.claude-call/bin/
-  const binSrc = join(appRoot, 'bin')
-  const binDest = join(homedir(), '.claude-call', 'bin')
+  const binSrc = resolve(join(appRoot, 'bin'))
+  const binDest = resolve(join(homedir(), '.claude-call', 'bin'))
   mkdirSync(binDest, { recursive: true })
 
   if (existsSync(binSrc)) {
@@ -319,28 +354,58 @@ function installSkillsAndScripts(): void {
 /**
  * Add call-display MCP entry to the project's .mcp.json.
  */
-function addDisplayMcpConfig(projectRoot: string): void {
-  const mcpJsonPath = join(projectRoot, '.mcp.json')
-  let mcpConfig: { mcpServers: Record<string, unknown> } = { mcpServers: {} }
+/**
+ * Register call-display MCP server in global ~/.claude/settings.json.
+ * This makes the display channel available in every Claude session without per-project init.
+ */
+function addDisplayMcpGlobal(): void {
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  let config: Record<string, unknown> = {}
 
-  if (existsSync(mcpJsonPath)) {
+  if (existsSync(claudeJsonPath)) {
     try {
-      mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as typeof mcpConfig
-      if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {}
+      config = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>
     } catch {
-      // Malformed — start fresh
-      mcpConfig = { mcpServers: {} }
+      writeln('  \x1b[33mWarning: ~/.claude.json is malformed, skipping MCP registration\x1b[0m')
+      writeln('  Add manually: "mcpServers": { "call-display": { "command": "node", "args": ["/path/to/display-server.js"] } }')
+      return
     }
   }
 
-  const displayServerPath = join(homedir(), '.claude-call', 'app', 'display-server.js')
-  mcpConfig.mcpServers['call-display'] = {
+  if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+    config.mcpServers = {}
+  }
+
+  const displayServerPath = join(homedir(), '.claude-call', 'app', 'dist', 'display-server.js')
+  ;(config.mcpServers as Record<string, unknown>)['call-display'] = {
     command: 'node',
     args: [displayServerPath],
   }
 
-  writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + '\n')
-  writeln(`  Added call-display to ${mcpJsonPath}`)
+  writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n')
+  writeln(`  Registered call-display in ${claudeJsonPath}`)
+}
+
+/**
+ * Remove call-display MCP server from global ~/.claude.json.
+ */
+function removeDisplayMcpGlobal(): void {
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  if (!existsSync(claudeJsonPath)) return
+
+  try {
+    const config = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>
+    const servers = config.mcpServers as Record<string, unknown> | undefined
+    if (servers && 'call-display' in servers) {
+      delete servers['call-display']
+      if (Object.keys(servers).length === 0) {
+        delete config.mcpServers
+      }
+      writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n')
+    }
+  } catch {
+    // Best-effort
+  }
 }
 
 // ─── Call commands ──────────────────────────────────────────
@@ -351,30 +416,42 @@ function addDisplayMcpConfig(projectRoot: string): void {
 async function callStart(): Promise<void> {
   // 1. Determine project root
   const projectRoot = findProjectRoot() ?? process.cwd()
+  const sessionId = randomUUID()
 
   // 2. Get run dir and ensure it exists
   const runDir = getRunDir(projectRoot)
   ensureRunDir(runDir)
 
-  // 3. Acquire lock early with launcher PID (prevents race conditions)
-  const lockHolder = getLockHolder(runDir)
-  if (lockHolder !== null) {
-    writeln(`Call session already running (PID ${lockHolder})`)
+  // 3. Acquire global voice lock (only one voice session allowed — mic is shared)
+  const voiceLock: VoiceLock = {
+    runDir,
+    projectRoot,
+    pid: process.pid,
+    sessionId,
+    startedAt: new Date().toISOString(),
+  }
+
+  const existingSession = resolveActiveSession()
+  if (existingSession !== null) {
+    writeln(`Call session already running (PID ${existingSession.pid}, project: ${existingSession.projectRoot})`)
+    writeln('Only one voice session can be active at a time (shared mic).')
+    writeln('Stop it first: claude-call call stop')
     process.exit(1)
   }
-  if (!acquireLock(runDir, process.pid)) {
-    writeln('Failed to acquire lock')
+
+  if (!acquireVoiceLock(voiceLock)) {
+    writeln('Failed to acquire voice lock')
     process.exit(1)
   }
 
   let claudePid: number | null = null
   let fifoWriterPid: number | null = null
 
-  // 4. Initialize workspace (creates .claude-call/ directory)
+  // 5. Initialize workspace (creates .claude-call/ directory)
   initWorkspace(projectRoot)
 
   try {
-    // 5. Create FIFO
+    // 6. Create FIFO
     const fifoPath = getFifoPath(runDir)
     if (existsSync(fifoPath)) {
       spawnSync('rm', ['-f', fifoPath])
@@ -383,10 +460,10 @@ async function callStart(): Promise<void> {
       throw new Error(`Failed to create FIFO at ${fifoPath}`)
     }
 
-    // 6. Generate per-run MCP config (copies all servers from project config)
+    // 7. Generate per-run MCP config (copies all servers from project config)
     const mcpConfigPath = generateMcpConfig(runDir, projectRoot)
 
-    // 7. Start persistent FIFO writer to keep FIFO open
+    // 8. Start persistent FIFO writer to keep FIFO open
     // Use exec so the PID is the real sleep process, not sh
     const fifoWriter = spawn('sh', ['-c', `exec sleep 999999 > "${fifoPath}"`], {
       detached: true,
@@ -395,13 +472,13 @@ async function callStart(): Promise<void> {
     fifoWriter.unref()
     fifoWriterPid = fifoWriter.pid!
 
-    // 8. Spawn headless claude with FIFO as stdin via shell redirection
+    // 9. Spawn headless claude with FIFO as stdin via shell redirection
     // Use exec so the PID is the real claude process, not sh
     const stdoutLogPath = join(runDir, 'stdout.log')
 
     const claudeProc = spawn('sh', ['-c',
       `exec claude -p --input-format stream-json --output-format stream-json --verbose ` +
-      `--mcp-config "${mcpConfigPath}" --dangerously-skip-permissions ` +
+      `--mcp-config "${mcpConfigPath}" --strict-mcp-config --dangerously-skip-permissions ` +
       `< "${fifoPath}" >> "${stdoutLogPath}" 2>&1`
     ], {
       detached: true,
@@ -414,20 +491,17 @@ async function callStart(): Promise<void> {
     claudeProc.unref()
     claudePid = claudeProc.pid!
 
-    const sessionId = randomUUID()
-
-    // 9. Update lock to claude PID (so lock stays valid after launcher exits)
-    releaseLock(runDir, process.pid)
-    if (!acquireLock(runDir, claudePid)) {
-      throw new Error('Failed to acquire lock with claude PID')
+    // 10. Update voice lock PID to claude (so lock stays valid after launcher exits)
+    if (!updateVoiceLockPid(process.pid, claudePid)) {
+      throw new Error('Failed to update voice lock with claude PID')
     }
 
-    // 10. Write status.json
+    // 11. Write status.json
     const status: StatusFile = {
       status: 'running',
       callPid: fifoWriterPid,
       claudePid,
-      startedAt: new Date().toISOString(),
+      startedAt: voiceLock.startedAt,
       projectRoot,
       sessionId,
     }
@@ -467,9 +541,9 @@ async function callStart(): Promise<void> {
     if (fifoWriterPid && isProcessAlive(fifoWriterPid)) {
       try { process.kill(fifoWriterPid, 'SIGKILL') } catch { /* ignore */ }
     }
-    // Release lock (try both PIDs in case we're in a transitional state)
-    releaseLock(runDir, process.pid)
-    if (claudePid) releaseLock(runDir, claudePid)
+    // Release voice lock (try both PIDs in case we're in a transitional state)
+    releaseVoiceLock(process.pid)
+    if (claudePid) releaseVoiceLock(claudePid)
     cleanupRunDir(runDir)
     throw err
   }
@@ -510,30 +584,45 @@ function waitForProcessExit(pid: number, timeoutMs: number): void {
  * Stop a call session.
  */
 async function callStop(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
+  // Support --if-pid <pid> flag: only stop if voice.lock PID matches.
+  // Used by eld EXIT trap to avoid killing a newer session that took over.
+  const ifPidIdx = process.argv.indexOf('--if-pid')
+  const ifPid = ifPidIdx !== -1 ? parseInt(process.argv[ifPidIdx + 1], 10) : null
 
-  // 1. Read status
-  const status = readStatus(runDir)
-  if (!status) {
+  // 1. Resolve active session from global voice lock
+  const session = resolveActiveSession()
+  if (!session) {
     writeln('No call session running')
     return
   }
 
-  // 2. Kill claude process and FIFO writer, waiting for exit
-  waitForProcessExit(status.claudePid, 5000)
-  waitForProcessExit(status.callPid, 2000)
-
-  // 3. Release lock (using the PID that holds it)
-  const lockHolder = getLockHolder(runDir)
-  if (lockHolder !== null) {
-    releaseLock(runDir, lockHolder)
+  // 2. If --if-pid was given, only stop if PID matches
+  if (ifPid !== null && session.pid !== ifPid) {
+    // A different session took over — don't kill it
+    return
   }
 
-  // 4. Clean up run dir
+  const runDir = session.runDir
+
+  // 3. Read status for process PIDs
+  const status = readStatus(runDir)
+  if (status) {
+    // 4. Kill claude process and FIFO writer, waiting for exit
+    waitForProcessExit(status.claudePid, 5000)
+    waitForProcessExit(status.callPid, 2000)
+  } else {
+    // Status missing but lock exists - try killing the lock holder PID
+    // (this covers race where stop is called before status.json is written)
+    waitForProcessExit(session.pid, 5000)
+  }
+
+  // 5. Release voice lock
+  releaseVoiceLock(session.pid)
+
+  // 6. Clean up run dir
   cleanupRunDir(runDir)
 
-  // 5. Print status
+  // 7. Print status
   writeln('Call session stopped')
 }
 
@@ -541,11 +630,8 @@ async function callStop(): Promise<void> {
  * Pause a call session (mic stays alive, stops processing).
  */
 async function callPause(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -556,6 +642,7 @@ async function callPause(): Promise<void> {
   }
 
   setPauseSignalIn(runDir)
+  updateStatus(runDir, { status: 'paused' })
   writeln('Call session paused')
 }
 
@@ -563,11 +650,8 @@ async function callPause(): Promise<void> {
  * Resume a paused call session.
  */
 async function callResume(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -578,6 +662,7 @@ async function callResume(): Promise<void> {
   }
 
   clearPauseSignalIn(runDir)
+  updateStatus(runDir, { status: 'running' })
   writeln('Call session resumed')
 }
 
@@ -585,11 +670,8 @@ async function callResume(): Promise<void> {
  * Enable wake word prefix — user must say "exo" before each command.
  */
 async function callPrefixOn(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -605,11 +687,8 @@ async function callPrefixOn(): Promise<void> {
  * Disable wake word prefix — all speech is processed directly.
  */
 async function callPrefixOff(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  const status = readStatus(runDir)
-  if (!status) {
+  const runDir = resolveActiveRunDir()
+  if (!runDir) {
     writeln('No call session running')
     return
   }
@@ -626,22 +705,31 @@ async function callPrefixOff(): Promise<void> {
  * Show call session status.
  */
 async function callStatus(): Promise<void> {
-  const projectRoot = findProjectRoot() ?? process.cwd()
-  const runDir = getRunDir(projectRoot)
-
-  // 1. Read status
-  const status = readStatus(runDir)
-  if (!status) {
+  // 1. Check global voice lock for active session
+  const session = resolveActiveSession()
+  if (!session) {
     writeln('Status: stopped')
     writeln('No active call session')
     return
   }
 
-  // 2. Check if processes are alive
+  const runDir = session.runDir
+
+  // 2. Read status file for process details
+  const status = readStatus(runDir)
+  if (!status) {
+    // Voice lock exists but status file missing - unusual state
+    writeln('Status: unknown')
+    writeln(`Session PID: ${session.pid}`)
+    writeln(`Project: ${session.projectRoot}`)
+    return
+  }
+
+  // 3. Check if processes are alive
   const claudeAlive = isProcessAlive(status.claudePid)
   const writerAlive = isProcessAlive(status.callPid)
 
-  // 3. Determine actual status
+  // 4. Determine actual status
   let actualStatus: string
   if (claudeAlive && writerAlive) {
     actualStatus = 'running'
@@ -651,7 +739,7 @@ async function callStatus(): Promise<void> {
     actualStatus = 'crashed (partial)'
   }
 
-  // 4. Print status
+  // 5. Print status
   writeln(`Status: ${actualStatus}`)
   writeln(`Claude PID: ${status.claudePid}${claudeAlive ? '' : ' (dead)'}`)
   writeln(`Writer PID: ${status.callPid}${writerAlive ? '' : ' (dead)'}`)
@@ -660,12 +748,12 @@ async function callStatus(): Promise<void> {
   writeln(`Session: ${status.sessionId}`)
 }
 
-// ─── Setup command ──────────────────────────────────────────
+// ─── Install command (global, once) ────────────────────────
 
-async function setup(): Promise<void> {
+async function install(): Promise<void> {
   writeln()
-  writeln('\x1b[1mclaude-call setup\x1b[0m  v' + VERSION)
-  writeln('Continuous two-way voice conversations for Claude Code')
+  writeln('\x1b[1mclaude-call install\x1b[0m  v' + VERSION)
+  writeln('Global installation — run once, then use "claude-call init" per project.')
   writeln()
 
   // Step 1: Check and install dependencies
@@ -683,7 +771,7 @@ async function setup(): Promise<void> {
     if (failed.length > 0) {
       writeln()
       writeln('\x1b[31mFailed to install: ' + failed.map(d => d.name).join(', ') + '\x1b[0m')
-      writeln('Install manually and re-run setup.')
+      writeln('Install manually and re-run install.')
       process.exit(1)
     }
     writeln()
@@ -714,18 +802,15 @@ async function setup(): Promise<void> {
   writeln('\x1b[1m   Starting whisper-server...\x1b[0m')
   writeln()
 
-  let whisperServerStarted = false
   const whisperServerBinary = findBinaryInPath('whisper-server')
   const whisperModelFile = join(getModelsDir(), whisperSize === 'large' ? 'ggml-large-v3-turbo.bin' : 'ggml-base.bin')
 
   if (whisperServerBinary) {
     if (existsSync(whisperModelFile)) {
       try {
-        // Check if whisper-server is already running on this port
         const alreadyRunning = await checkWhisperHealth()
         if (alreadyRunning) {
           writeln('  whisper-server already running on 127.0.0.1:8178')
-          whisperServerStarted = true
         } else {
           const serverProc = spawn(whisperServerBinary, [
             '-m', whisperModelFile,
@@ -740,9 +825,8 @@ async function setup(): Promise<void> {
           })
           serverProc.unref()
 
-          // Wait up to 5 seconds for health check
-          whisperServerStarted = await waitForWhisperHealth(5000)
-          if (whisperServerStarted) {
+          const started = await waitForWhisperHealth(5000)
+          if (started) {
             writeln(`  \x1b[32mwhisper-server started\x1b[0m (pid ${serverProc.pid}, port 8178)`)
           } else {
             writeln('  \x1b[33mwhisper-server started but health check timed out\x1b[0m')
@@ -760,34 +844,11 @@ async function setup(): Promise<void> {
   }
   writeln()
 
-  // Detect project root for pronunciation + MCP config
-  let pronunciationFile: string | undefined
-  const projectRoot = findProjectRoot()
-
-  // Step 3: Install skills, scripts, and display MCP globally
-  writeln('\x1b[1m3. Installing skills and display server...\x1b[0m')
+  // Step 3: Install skills, scripts, and display server globally
+  writeln('\x1b[1m3. Installing skills, launcher scripts, and display server...\x1b[0m')
   writeln()
   installSkillsAndScripts()
-  if (projectRoot) {
-    addDisplayMcpConfig(projectRoot)
-  }
   writeln()
-
-  // Look for pronunciation.yaml in the project directory
-  if (projectRoot) {
-    const pronunciationPaths = [
-      join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
-      join(projectRoot, 'pronunciation.yaml'),
-      join(projectRoot, 'config', 'pronunciation.yaml'),
-    ]
-    for (const p of pronunciationPaths) {
-      if (existsSync(p)) {
-        pronunciationFile = resolve(p)
-        writeln(`  Found pronunciation dictionary: ${pronunciationFile}`)
-        break
-      }
-    }
-  }
 
   // Step 4: Write global config
   writeln('\x1b[1m4. Writing configuration...\x1b[0m')
@@ -796,6 +857,14 @@ async function setup(): Promise<void> {
   const config = loadConfig()
   const configDir = config.dataDir
   mkdirSync(configDir, { recursive: true })
+
+  // Wire up pronunciation if user has a custom file
+  let pronunciationFile: string | undefined
+  const userPronPath = join(configDir, 'pronunciation.yaml')
+  if (existsSync(userPronPath)) {
+    pronunciationFile = userPronPath
+    writeln(`  Found pronunciation dictionary: ${pronunciationFile}`)
+  }
 
   const configPath = join(configDir, 'config.yaml')
   if (existsSync(configPath)) {
@@ -809,25 +878,71 @@ async function setup(): Promise<void> {
   }
   writeln()
 
-  // Step 5: Done
-  writeln('\x1b[1m5. Setup complete!\x1b[0m')
+  // Step 5: Register call-display MCP in global Claude settings
+  writeln('\x1b[1m5. Registering display channel globally...\x1b[0m')
   writeln()
-  writeln('  \x1b[1mOption A: Launcher scripts (recommended)\x1b[0m')
+  addDisplayMcpGlobal()
   writeln()
-  writeln('  Add ~/.claude-call/bin to your PATH, then use:')
+
+  // Step 6: Done
+  writeln('\x1b[1m6. Install complete!\x1b[0m')
   writeln()
-  writeln('    \x1b[1meld\x1b[0m      — Claude + voice (like cld)')
+  writeln('  Add ~/.claude-call/bin to your PATH:')
+  writeln()
+  writeln('    \x1b[2mexport PATH="$HOME/.claude-call/bin:$PATH"\x1b[0m')
+  writeln()
+  writeln('  Then run \x1b[1meld\x1b[0m from any project directory.')
+  writeln()
+}
+
+// ─── Init command (per-project) ────────────────────────────
+
+async function init(): Promise<void> {
+  writeln()
+  writeln('\x1b[1mclaude-call init\x1b[0m')
+  writeln()
+
+  // Check that install has been run
+  const configPath = join(loadConfig().dataDir, 'config.yaml')
+  if (!existsSync(configPath)) {
+    writeln('\x1b[31mclaude-call is not installed.\x1b[0m')
+    writeln('Run \x1b[1mclaude-call install\x1b[0m first.')
+    process.exit(1)
+  }
+
+  const projectRoot = findProjectRoot()
+  if (!projectRoot) {
+    writeln('\x1b[31mNo project found.\x1b[0m Run this from a directory with .git or package.json.')
+    process.exit(1)
+  }
+
+  writeln(`  Project: ${projectRoot}`)
+  writeln()
+
+  // Check for project pronunciation.yaml
+  const pronunciationPaths = [
+    join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
+    join(projectRoot, 'pronunciation.yaml'),
+    join(projectRoot, 'config', 'pronunciation.yaml'),
+  ]
+  for (const p of pronunciationPaths) {
+    if (existsSync(p)) {
+      writeln(`  Found pronunciation dictionary: ${resolve(p)}`)
+      writeln(`  Set in config: pronunciation.file: ${resolve(p)}`)
+      break
+    }
+  }
+
+  // Done
+  writeln('\x1b[1mInit complete!\x1b[0m')
+  writeln()
+  writeln('  Start a voice call with:')
+  writeln()
+  writeln('    \x1b[1meld\x1b[0m      — Claude + voice')
   writeln('    \x1b[1meldc\x1b[0m     — Claude + voice, continue last conversation')
   writeln('    \x1b[1meldr\x1b[0m     — Claude + voice, resume last conversation')
   writeln()
-  writeln('  Voice session starts automatically and stops when you exit.')
-  writeln()
-  writeln('  \x1b[1mOption B: Manual control\x1b[0m')
-  writeln()
-  writeln('  Start Claude with --dangerously-load-development-channels server:call-display')
-  writeln('  Then use \x1b[1m/call-start\x1b[0m and \x1b[1m/call-stop\x1b[0m to manage the voice session.')
-  writeln()
-  writeln('  Skills installed globally to ~/.claude/commands/ — available in all projects.')
+  writeln('  Or use \x1b[1m/call-start\x1b[0m from any Claude Code session.')
   writeln()
 }
 
@@ -855,6 +970,146 @@ function writeConfigFile(configPath: string, whisperSize: string, pronunciationF
 
   writeFileSync(configPath, stringifyYaml(config))
   writeln(`  Config written to ${configPath}`)
+}
+
+// ─── Uninstall command ─────────────────────────────────────
+
+async function uninstall(): Promise<void> {
+  const dryRun = process.argv.includes('--dry-run')
+  const dataDir = loadConfig().dataDir
+  const commandsDir = join(homedir(), '.claude', 'commands')
+
+  writeln()
+  writeln(dryRun ? '\x1b[1mclaude-call uninstall --dry-run\x1b[0m' : '\x1b[1mclaude-call uninstall\x1b[0m')
+  writeln()
+
+  // Check for active call sessions
+  const runsDir = join(dataDir, 'runs')
+  if (existsSync(runsDir)) {
+    const entries = readdirSync(runsDir)
+    for (const entry of entries) {
+      const runDir = join(runsDir, entry)
+      const status = readStatus(runDir)
+      if (status && isProcessAlive(status.claudePid)) {
+        writeln(`\x1b[31mActive call session detected (PID ${status.claudePid}).\x1b[0m`)
+        writeln('Run \x1b[1mclaude-call call stop\x1b[0m first.')
+        process.exit(1)
+      }
+    }
+  }
+
+  // Build list of things to remove
+  const items: { path: string; desc: string; exists: boolean }[] = []
+
+  items.push({ path: dataDir, desc: 'Data directory (config, models, logs, runs, bin)', exists: existsSync(dataDir) })
+
+  // Skill files
+  if (existsSync(commandsDir)) {
+    const knownSkills = ['call-start.md', 'call-stop.md', 'call-pause.md', 'call-resume.md', 'call-status.md', 'call-prefix-on.md', 'call-prefix-off.md']
+    const skills = readdirSync(commandsDir).filter(f => knownSkills.includes(f))
+    for (const s of skills) {
+      items.push({ path: join(commandsDir, s), desc: `Skill: ${s}`, exists: true })
+    }
+  }
+
+  // CLI symlink
+  const symlinkPath = '/usr/local/bin/claude-call'
+  if (existsSync(symlinkPath)) {
+    items.push({ path: symlinkPath, desc: 'CLI symlink (may need sudo to remove)', exists: true })
+  }
+
+  // Check for whisper-server on port 8178 (best-effort — may not be ours)
+  let whisperRunning = false
+  try {
+    whisperRunning = await checkWhisperHealth()
+  } catch { /* ignore */ }
+
+  const existing = items.filter(i => i.exists)
+  if (existing.length === 0 && !whisperRunning) {
+    writeln('Nothing to uninstall.')
+    return
+  }
+
+  writeln('Will remove:')
+  for (const item of existing) {
+    writeln(`  \x1b[31m-\x1b[0m ${item.path}`)
+    writeln(`    ${item.desc}`)
+  }
+  if (whisperRunning) {
+    writeln(`  \x1b[31m-\x1b[0m whisper-server process on port 8178`)
+  }
+  writeln()
+
+  // Global MCP entry
+  writeln(`  \x1b[31m-\x1b[0m ~/.claude.json mcpServers.call-display`)
+  writeln(`    Global MCP server entry`)
+
+  // Installed dependencies
+  writeln()
+  writeln('\x1b[33mManual step:\x1b[0m Remove installed dependencies if no longer needed:')
+  writeln('  brew uninstall sox whisper-cpp')
+  writeln('  pip uninstall piper-tts edge-tts')
+  writeln('  # Qwen3-TTS daemon (if installed separately)')
+  writeln('  # Silero VAD model + Piper/Whisper models are inside ~/.claude-call/')
+  writeln()
+
+  // PATH notice
+  const pathLine = 'export PATH="$HOME/.claude-call/bin:$PATH"'
+  writeln('\x1b[33mManual step:\x1b[0m Remove this line from your shell config (.zshrc / .bashrc):')
+  writeln(`  ${pathLine}`)
+  writeln()
+
+  if (dryRun) {
+    writeln('\x1b[2m(dry run — nothing was deleted)\x1b[0m')
+    return
+  }
+
+  if (!await confirm('Proceed with uninstall?', false)) {
+    writeln('Aborted.')
+    return
+  }
+
+  // Kill whisper-server
+  if (whisperRunning) {
+    writeln('  Stopping whisper-server...')
+    try {
+      // Find and kill whisper-server listening on port 8178
+      const result = spawnSync('lsof', ['-ti', ':8178'])
+      if (result.status === 0) {
+        const pids = result.stdout.toString().trim().split('\n')
+        for (const pid of pids) {
+          try { process.kill(parseInt(pid, 10), 'SIGTERM') } catch { /* ignore */ }
+        }
+        writeln('  whisper-server stopped')
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Remove files
+  for (const item of existing) {
+    try {
+      rmSync(item.path, { recursive: true, force: true })
+      writeln(`  \x1b[32mRemoved\x1b[0m ${item.path}`)
+    } catch {
+      // May need sudo for /usr/local/bin symlink
+      try {
+        spawnSync('sudo', ['rm', '-rf', item.path], { stdio: 'inherit' })
+        writeln(`  \x1b[32mRemoved\x1b[0m ${item.path}`)
+      } catch (err2) {
+        writeln(`  \x1b[31mFailed\x1b[0m ${item.path}: ${(err2 as Error).message}`)
+      }
+    }
+  }
+
+  // Remove call-display from global Claude settings
+  removeDisplayMcpGlobal()
+  writeln('  \x1b[32mRemoved\x1b[0m call-display from ~/.claude.json')
+
+  writeln()
+  writeln('Uninstall complete.')
+  writeln()
+  writeln(`Don't forget to remove the PATH line from your shell config.`)
+  writeln()
 }
 
 // ─── Check command ──────────────────────────────────────────
@@ -891,7 +1146,7 @@ async function check(): Promise<void> {
   if (allGood) {
     writeln('\x1b[32mReady to use.\x1b[0m')
   } else {
-    writeln('\x1b[31mSome requirements are missing. Run "claude-call setup" to fix.\x1b[0m')
+    writeln('\x1b[31mSome requirements are missing. Run "claude-call install" to fix.\x1b[0m')
   }
   writeln()
 }
@@ -903,15 +1158,38 @@ async function serve(): Promise<void> {
   await import('./channel.js')
 }
 
+// ─── Monitor command ────────────────────────────────────────
+
+async function monitor(): Promise<void> {
+  // Dynamically import the TUI monitor (compiled separately to dist/tui/)
+  // Use variable to prevent TypeScript from resolving tsx file at compile time
+  const tuiPath = './tui/index.js'
+  await import(tuiPath)
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 const command = process.argv[2]
 const subcommand = process.argv[3]
 
 switch (command) {
-  case 'setup':
-    setup().catch((err) => {
-      writeln(`\nSetup failed: ${(err as Error).message}`)
+  case 'install':
+    install().catch((err) => {
+      writeln(`\nInstall failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
+  case 'init':
+    init().catch((err) => {
+      writeln(`\nInit failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
+  case 'uninstall':
+    uninstall().catch((err) => {
+      writeln(`\nUninstall failed: ${(err as Error).message}`)
       process.exit(1)
     })
     break
@@ -926,6 +1204,13 @@ switch (command) {
   case 'serve':
     serve().catch((err) => {
       process.stderr.write(`[voice] fatal: ${err}\n`)
+      process.exit(1)
+    })
+    break
+
+  case 'monitor':
+    monitor().catch((err) => {
+      writeln(`\nMonitor failed: ${(err as Error).message}`)
       process.exit(1)
     })
     break
@@ -997,8 +1282,11 @@ switch (command) {
     writeln('Continuous two-way voice conversations for Claude Code')
     writeln()
     writeln('Commands:')
-    writeln('  setup           Interactive first-run setup')
+    writeln('  install         Global setup (deps, models, skills, PATH)')
+    writeln('  init            Per-project setup (.mcp.json for display channel)')
+    writeln('  uninstall       Remove claude-call and all data (--dry-run to preview)')
     writeln('  check           Verify dependencies and models')
+    writeln('  monitor         Interactive status panel (TUI)')
     writeln('  serve           Start MCP channel server (used by Claude Code)')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
@@ -1007,8 +1295,9 @@ switch (command) {
     writeln('  call status     Show call session status')
     writeln()
     writeln('Quick start:')
-    writeln('  npx claude-call setup')
-    writeln('  # Then from Claude Code: /call-start')
+    writeln('  claude-call install    # once, global')
+    writeln('  claude-call init       # per project')
+    writeln('  eld                    # start Claude + voice')
     writeln()
     break
 }

@@ -144,6 +144,8 @@ async function waitForUnpause(): Promise<void> {
         if (matchesUnpause(raw)) {
           softPaused = false
           log('unpaused by voice command')
+          const resumeRunDir = getRunDirFromEnv()
+          if (resumeRunDir) updateStatus(resumeRunDir, { status: 'running' })
           kwMonitor.stop()
           resolve()
         }
@@ -253,9 +255,9 @@ const mcp = new Server(
       'Reply using the speak tool so the user hears your response.',
       'Summarize your answer when speaking. For detailed or complex responses, speak the summary and write the full answer as text in the session.',
       'No markdown, no bullet points, no code blocks in spoken replies.',
-      'You can still use tools (Read, Write, Bash, etc.) before replying — just make sure to call speak with the final answer.',
+      'You may use Read for one quick file lookup per request. For anything else (Write, Edit, Bash, Grep, searches, multi-step work), dispatch a background agent.',
       'If the user also types in the terminal, respond normally in text (don\'t call speak for typed messages).',
-      'CALL MODE: Never make the user wait. Offload ALL work to background agents — even small checks (trace lookups, calendar checks, memory searches, file reads, multi-step research). Dispatch with run_in_background: true and keep talking.',
+      'CALL MODE: Never make the user wait. Offload work to background agents. Dispatch with run_in_background: true and keep talking.',
       'Answer only from immediate context or profile knowledge directly. Everything else gets an agent.',
       'When a background agent completes, surface the result naturally in conversation.',
     ].join(' '),
@@ -510,6 +512,8 @@ async function voiceLoop(): Promise<void> {
         softPaused = true
         playPauseChime()
         log(`soft pause triggered: "${text}"`)
+        const pauseRunDir = getRunDirFromEnv()
+        if (pauseRunDir) updateStatus(pauseRunDir, { status: 'paused' })
         try {
           await deliver('[Voice paused — say "exo start" to resume]')
         } catch { /* ignore */ }
