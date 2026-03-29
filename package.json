@@ -16,12 +16,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.tui.json",
     "dev": "tsc --watch",
     "install:call": "node dist/cli.js install",
     "init": "node dist/cli.js init",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tui.json"
   },
   "keywords": [
     "claude",
@@ -45,11 +45,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "ink": "^5.1.0",
     "onnxruntime-node": "^1.21.0",
+    "react": "^18.3.1",
     "yaml": "^2.7.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
+    "@types/react": "^18.3.18",
     "typescript": "^5.8.3"
   }
 }

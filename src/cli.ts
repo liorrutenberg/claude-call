@@ -1076,6 +1076,15 @@ async function serve(): Promise<void> {
   await import('./channel.js')
 }
 
+// ─── Monitor command ────────────────────────────────────────
+
+async function monitor(): Promise<void> {
+  // Dynamically import the TUI monitor (compiled separately to dist/tui/)
+  // Use variable to prevent TypeScript from resolving tsx file at compile time
+  const tuiPath = './tui/index.js'
+  await import(tuiPath)
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 const command = process.argv[2]
@@ -1113,6 +1122,13 @@ switch (command) {
   case 'serve':
     serve().catch((err) => {
       process.stderr.write(`[voice] fatal: ${err}\n`)
+      process.exit(1)
+    })
+    break
+
+  case 'monitor':
+    monitor().catch((err) => {
+      writeln(`\nMonitor failed: ${(err as Error).message}`)
       process.exit(1)
     })
     break
@@ -1188,6 +1204,7 @@ switch (command) {
     writeln('  init            Per-project setup (.mcp.json for display channel)')
     writeln('  uninstall       Remove claude-call and all data (--dry-run to preview)')
     writeln('  check           Verify dependencies and models')
+    writeln('  monitor         Interactive status panel (TUI)')
     writeln('  serve           Start MCP channel server (used by Claude Code)')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
