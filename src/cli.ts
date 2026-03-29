@@ -819,7 +819,7 @@ async function init(): Promise<void> {
   writeln()
 
   // Check that install has been run
-  const configPath = join(homedir(), '.claude-call', 'config.yaml')
+  const configPath = join(loadConfig().dataDir, 'config.yaml')
   if (!existsSync(configPath)) {
     writeln('\x1b[31mclaude-call is not installed.\x1b[0m')
     writeln('Run \x1b[1mclaude-call install\x1b[0m first.')
@@ -840,6 +840,20 @@ async function init(): Promise<void> {
   writeln()
   addDisplayMcpConfig(projectRoot)
   writeln()
+
+  // Check for project pronunciation.yaml
+  const pronunciationPaths = [
+    join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
+    join(projectRoot, 'pronunciation.yaml'),
+    join(projectRoot, 'config', 'pronunciation.yaml'),
+  ]
+  for (const p of pronunciationPaths) {
+    if (existsSync(p)) {
+      writeln(`  Found pronunciation dictionary: ${resolve(p)}`)
+      writeln(`  Set in config: pronunciation.file: ${resolve(p)}`)
+      break
+    }
+  }
 
   // Done
   writeln('\x1b[1m2. Init complete!\x1b[0m')
@@ -884,7 +898,7 @@ function writeConfigFile(configPath: string, whisperSize: string, pronunciationF
 
 async function uninstall(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run')
-  const dataDir = join(homedir(), '.claude-call')
+  const dataDir = loadConfig().dataDir
   const commandsDir = join(homedir(), '.claude', 'commands')
 
   writeln()
@@ -918,6 +932,12 @@ async function uninstall(): Promise<void> {
     for (const s of skills) {
       items.push({ path: join(commandsDir, s), desc: `Skill: ${s}`, exists: true })
     }
+  }
+
+  // CLI symlink
+  const symlinkPath = '/usr/local/bin/claude-call'
+  if (existsSync(symlinkPath)) {
+    items.push({ path: symlinkPath, desc: 'CLI symlink (may need sudo to remove)', exists: true })
   }
 
   // Check for whisper-server on port 8178 (best-effort — may not be ours)
