@@ -89,6 +89,5 @@ echo
 echo "Next steps:"
 echo
 echo "  claude-call install    # deps, models, skills, PATH"
-echo "  claude-call init       # per project (optional)"
 echo "  eld                    # start Claude + voice"
 echo

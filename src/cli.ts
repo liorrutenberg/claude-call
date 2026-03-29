@@ -311,10 +311,12 @@ function installSkillsAndScripts(): void {
   }
 
   // 2. Copy compiled dist/ to ~/.claude-call/app/dist/ (includes cli, display-server, tui, etc.)
-  const distSrc = join(appRoot, 'dist')
-  const distDest = join(homedir(), '.claude-call', 'app', 'dist')
+  const distSrc = resolve(join(appRoot, 'dist'))
+  const distDest = resolve(join(homedir(), '.claude-call', 'app', 'dist'))
 
-  if (existsSync(distSrc)) {
+  if (distSrc === distDest) {
+    writeln(`  dist/ already in place (running from installed location)`)
+  } else if (existsSync(distSrc)) {
     cpSync(distSrc, distDest, { recursive: true, force: true })
     writeln(`  Installed dist/ → ${distDest}`)
   } else {
@@ -322,10 +324,12 @@ function installSkillsAndScripts(): void {
   }
 
   // 2b. Copy node_modules/ to ~/.claude-call/app/node_modules/ (runtime dependencies)
-  const nodeModulesSrc = join(appRoot, 'node_modules')
-  const nodeModulesDest = join(homedir(), '.claude-call', 'app', 'node_modules')
+  const nodeModulesSrc = resolve(join(appRoot, 'node_modules'))
+  const nodeModulesDest = resolve(join(homedir(), '.claude-call', 'app', 'node_modules'))
 
-  if (existsSync(nodeModulesSrc)) {
+  if (nodeModulesSrc === nodeModulesDest) {
+    writeln(`  node_modules/ already in place (running from installed location)`)
+  } else if (existsSync(nodeModulesSrc)) {
     cpSync(nodeModulesSrc, nodeModulesDest, { recursive: true, force: true })
     writeln(`  Installed node_modules/ → ${nodeModulesDest}`)
   } else {
@@ -333,8 +337,8 @@ function installSkillsAndScripts(): void {
   }
 
   // 3. Install launcher scripts (eld, eldc, eldr) to ~/.claude-call/bin/
-  const binSrc = join(appRoot, 'bin')
-  const binDest = join(homedir(), '.claude-call', 'bin')
+  const binSrc = resolve(join(appRoot, 'bin'))
+  const binDest = resolve(join(homedir(), '.claude-call', 'bin'))
   mkdirSync(binDest, { recursive: true })
 
   if (existsSync(binSrc)) {
@@ -887,7 +891,7 @@ async function install(): Promise<void> {
   writeln()
   writeln('    \x1b[2mexport PATH="$HOME/.claude-call/bin:$PATH"\x1b[0m')
   writeln()
-  writeln('  Then run \x1b[1mclaude-call init\x1b[0m from each project directory.')
+  writeln('  Then run \x1b[1meld\x1b[0m from any project directory.')
   writeln()
 }
 
