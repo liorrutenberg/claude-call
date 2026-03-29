@@ -9,7 +9,7 @@
  *   serve  — Start the MCP channel server (used by Claude Code, not humans)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, cpSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
@@ -308,16 +308,26 @@ function installSkillsAndScripts(): void {
     writeln(`  \x1b[33mSkills directory not found at ${skillsSrc} — skipping skill install\x1b[0m`)
   }
 
-  // 2. Copy compiled display-server.js to ~/.claude-call/app/
-  const displayServerSrc = join(appRoot, 'dist', 'display-server.js')
-  const appDest = join(homedir(), '.claude-call', 'app')
-  mkdirSync(appDest, { recursive: true })
+  // 2. Copy compiled dist/ to ~/.claude-call/app/dist/ (includes cli, display-server, tui, etc.)
+  const distSrc = join(appRoot, 'dist')
+  const distDest = join(homedir(), '.claude-call', 'app', 'dist')
 
-  if (existsSync(displayServerSrc)) {
-    copyFileSync(displayServerSrc, join(appDest, 'display-server.js'))
-    writeln(`  Installed display-server.js → ${join(appDest, 'display-server.js')}`)
+  if (existsSync(distSrc)) {
+    cpSync(distSrc, distDest, { recursive: true, force: true })
+    writeln(`  Installed dist/ → ${distDest}`)
   } else {
-    writeln(`  \x1b[33mdisplay-server.js not found at ${displayServerSrc} — skipping\x1b[0m`)
+    writeln(`  \x1b[33mdist/ not found at ${distSrc} — skipping\x1b[0m`)
+  }
+
+  // 2b. Copy node_modules/ to ~/.claude-call/app/node_modules/ (runtime dependencies)
+  const nodeModulesSrc = join(appRoot, 'node_modules')
+  const nodeModulesDest = join(homedir(), '.claude-call', 'app', 'node_modules')
+
+  if (existsSync(nodeModulesSrc)) {
+    cpSync(nodeModulesSrc, nodeModulesDest, { recursive: true, force: true })
+    writeln(`  Installed node_modules/ → ${nodeModulesDest}`)
+  } else {
+    writeln(`  \x1b[33mnode_modules/ not found at ${nodeModulesSrc} — skipping\x1b[0m`)
   }
 
   // 3. Install launcher scripts (eld, eldc, eldr) to ~/.claude-call/bin/
