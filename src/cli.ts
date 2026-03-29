@@ -338,28 +338,58 @@ function installSkillsAndScripts(): void {
 /**
  * Add call-display MCP entry to the project's .mcp.json.
  */
-function addDisplayMcpConfig(projectRoot: string): void {
-  const mcpJsonPath = join(projectRoot, '.mcp.json')
-  let mcpConfig: { mcpServers: Record<string, unknown> } = { mcpServers: {} }
+/**
+ * Register call-display MCP server in global ~/.claude/settings.json.
+ * This makes the display channel available in every Claude session without per-project init.
+ */
+function addDisplayMcpGlobal(): void {
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  let config: Record<string, unknown> = {}
 
-  if (existsSync(mcpJsonPath)) {
+  if (existsSync(claudeJsonPath)) {
     try {
-      mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8')) as typeof mcpConfig
-      if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {}
+      config = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>
     } catch {
-      // Malformed — start fresh
-      mcpConfig = { mcpServers: {} }
+      writeln('  \x1b[33mWarning: ~/.claude.json is malformed, skipping MCP registration\x1b[0m')
+      writeln('  Add manually: "mcpServers": { "call-display": { "command": "node", "args": ["/path/to/display-server.js"] } }')
+      return
     }
   }
 
-  const displayServerPath = join(homedir(), '.claude-call', 'app', 'display-server.js')
-  mcpConfig.mcpServers['call-display'] = {
+  if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+    config.mcpServers = {}
+  }
+
+  const displayServerPath = join(homedir(), '.claude-call', 'app', 'dist', 'display-server.js')
+  ;(config.mcpServers as Record<string, unknown>)['call-display'] = {
     command: 'node',
     args: [displayServerPath],
   }
 
-  writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2) + '\n')
-  writeln(`  Added call-display to ${mcpJsonPath}`)
+  writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n')
+  writeln(`  Registered call-display in ${claudeJsonPath}`)
+}
+
+/**
+ * Remove call-display MCP server from global ~/.claude.json.
+ */
+function removeDisplayMcpGlobal(): void {
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  if (!existsSync(claudeJsonPath)) return
+
+  try {
+    const config = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>
+    const servers = config.mcpServers as Record<string, unknown> | undefined
+    if (servers && 'call-display' in servers) {
+      delete servers['call-display']
+      if (Object.keys(servers).length === 0) {
+        delete config.mcpServers
+      }
+      writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n')
+    }
+  } catch {
+    // Best-effort
+  }
 }
 
 // ─── Call commands ──────────────────────────────────────────
@@ -401,11 +431,11 @@ async function callStart(): Promise<void> {
   let claudePid: number | null = null
   let fifoWriterPid: number | null = null
 
-  // 4. Initialize workspace (creates .claude-call/ directory)
+  // 5. Initialize workspace (creates .claude-call/ directory)
   initWorkspace(projectRoot)
 
   try {
-    // 5. Create FIFO
+    // 6. Create FIFO
     const fifoPath = getFifoPath(runDir)
     if (existsSync(fifoPath)) {
       spawnSync('rm', ['-f', fifoPath])
@@ -414,10 +444,10 @@ async function callStart(): Promise<void> {
       throw new Error(`Failed to create FIFO at ${fifoPath}`)
     }
 
-    // 6. Generate per-run MCP config (copies all servers from project config)
+    // 7. Generate per-run MCP config (copies all servers from project config)
     const mcpConfigPath = generateMcpConfig(runDir, projectRoot)
 
-    // 7. Start persistent FIFO writer to keep FIFO open
+    // 8. Start persistent FIFO writer to keep FIFO open
     // Use exec so the PID is the real sleep process, not sh
     const fifoWriter = spawn('sh', ['-c', `exec sleep 999999 > "${fifoPath}"`], {
       detached: true,
@@ -426,13 +456,13 @@ async function callStart(): Promise<void> {
     fifoWriter.unref()
     fifoWriterPid = fifoWriter.pid!
 
-    // 8. Spawn headless claude with FIFO as stdin via shell redirection
+    // 9. Spawn headless claude with FIFO as stdin via shell redirection
     // Use exec so the PID is the real claude process, not sh
     const stdoutLogPath = join(runDir, 'stdout.log')
 
     const claudeProc = spawn('sh', ['-c',
       `exec claude -p --input-format stream-json --output-format stream-json --verbose ` +
-      `--mcp-config "${mcpConfigPath}" --dangerously-skip-permissions ` +
+      `--mcp-config "${mcpConfigPath}" --strict-mcp-config --dangerously-skip-permissions ` +
       `< "${fifoPath}" >> "${stdoutLogPath}" 2>&1`
     ], {
       detached: true,
@@ -445,12 +475,12 @@ async function callStart(): Promise<void> {
     claudeProc.unref()
     claudePid = claudeProc.pid!
 
-    // 9. Update voice lock PID to claude (so lock stays valid after launcher exits)
+    // 10. Update voice lock PID to claude (so lock stays valid after launcher exits)
     if (!updateVoiceLockPid(process.pid, claudePid)) {
       throw new Error('Failed to update voice lock with claude PID')
     }
 
-    // 10. Write status.json
+    // 11. Write status.json
     const status: StatusFile = {
       status: 'running',
       callPid: fifoWriterPid,
@@ -819,8 +849,14 @@ async function install(): Promise<void> {
   }
   writeln()
 
-  // Step 5: Done
-  writeln('\x1b[1m5. Install complete!\x1b[0m')
+  // Step 5: Register call-display MCP in global Claude settings
+  writeln('\x1b[1m5. Registering display channel globally...\x1b[0m')
+  writeln()
+  addDisplayMcpGlobal()
+  writeln()
+
+  // Step 6: Done
+  writeln('\x1b[1m6. Install complete!\x1b[0m')
   writeln()
   writeln('  Add ~/.claude-call/bin to your PATH:')
   writeln()
@@ -854,12 +890,6 @@ async function init(): Promise<void> {
   writeln(`  Project: ${projectRoot}`)
   writeln()
 
-  // Add call-display MCP entry to project .mcp.json
-  writeln('\x1b[1m1. Configuring display channel...\x1b[0m')
-  writeln()
-  addDisplayMcpConfig(projectRoot)
-  writeln()
-
   // Check for project pronunciation.yaml
   const pronunciationPaths = [
     join(projectRoot, 'data', 'integrations', 'voice', 'pronunciation.yaml'),
@@ -875,7 +905,7 @@ async function init(): Promise<void> {
   }
 
   // Done
-  writeln('\x1b[1m2. Init complete!\x1b[0m')
+  writeln('\x1b[1mInit complete!\x1b[0m')
   writeln()
   writeln('  Start a voice call with:')
   writeln()
@@ -1022,6 +1052,10 @@ async function uninstall(): Promise<void> {
       writeln(`  \x1b[31mFailed\x1b[0m ${item.path}: ${(err as Error).message}`)
     }
   }
+
+  // Remove call-display from global Claude settings
+  removeDisplayMcpGlobal()
+  writeln('  \x1b[32mRemoved\x1b[0m call-display from ~/.claude.json')
 
   writeln()
   writeln('Uninstall complete.')

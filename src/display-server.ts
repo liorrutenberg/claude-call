@@ -14,6 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { resolveActiveRunDir } from './runtime.js'
 
 const PORT = 9847
@@ -128,17 +129,36 @@ const http = createServer((req, res) => {
   })
 })
 
-http.listen(PORT, '127.0.0.1', () => {
-  process.stderr.write(`call-display MCP listening on http://127.0.0.1:${PORT}\n`)
-})
+function startListening(retry = false): void {
+  http.listen(PORT, '127.0.0.1', () => {
+    process.stderr.write(`call-display MCP listening on http://127.0.0.1:${PORT}\n`)
+  })
 
-http.on('error', (err: NodeJS.ErrnoException) => {
-  if (err.code === 'EADDRINUSE') {
-    process.stderr.write(`ERROR: Port ${PORT} already in use. Is another call-display instance running?\n`)
-    process.exit(1)
-  }
-  throw err
-})
+  http.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && !retry) {
+      // Kill existing display server and retry once — only one session owns the display
+      process.stderr.write(`Port ${PORT} in use, taking over...\n`)
+      try {
+        const result = spawnSync('lsof', ['-ti', `:${PORT}`])
+        if (result.status === 0) {
+          for (const pid of result.stdout.toString().trim().split('\n').filter(Boolean)) {
+            try { process.kill(parseInt(pid, 10), 'SIGTERM') } catch { /* ignore */ }
+          }
+        }
+      } catch { /* ignore */ }
+      // Brief wait for port to free, then retry
+      setTimeout(() => startListening(true), 300)
+      return
+    }
+    if (err.code === 'EADDRINUSE') {
+      process.stderr.write(`ERROR: Port ${PORT} still in use after takeover attempt\n`)
+      process.exit(1)
+    }
+    throw err
+  })
+}
+
+startListening()
 
 // ─── MCP stdio transport ────────────────────────────────────
 
