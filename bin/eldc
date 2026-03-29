@@ -2,6 +2,8 @@
 # eldc — Claude Code with voice call session (continue last conversation)
 # Equivalent to cld --continue + voice
 
-claude-call call start 2>/dev/null
-trap "claude-call call stop 2>/dev/null" EXIT INT TERM
+OUTPUT=$(claude-call call start 2>&1)
+echo "$OUTPUT"
+PID=$(echo "$OUTPUT" | grep -o 'PID [0-9]*' | grep -o '[0-9]*')
+trap "claude-call call stop --if-pid $PID 2>/dev/null" EXIT INT TERM
 CLAUDE_CALL=1 claude --dangerously-skip-permissions --dangerously-load-development-channels server:call-display --continue "$@"

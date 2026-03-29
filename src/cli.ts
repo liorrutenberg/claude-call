@@ -568,6 +568,11 @@ function waitForProcessExit(pid: number, timeoutMs: number): void {
  * Stop a call session.
  */
 async function callStop(): Promise<void> {
+  // Support --if-pid <pid> flag: only stop if voice.lock PID matches.
+  // Used by eld EXIT trap to avoid killing a newer session that took over.
+  const ifPidIdx = process.argv.indexOf('--if-pid')
+  const ifPid = ifPidIdx !== -1 ? parseInt(process.argv[ifPidIdx + 1], 10) : null
+
   // 1. Resolve active session from global voice lock
   const session = resolveActiveSession()
   if (!session) {
@@ -575,12 +580,18 @@ async function callStop(): Promise<void> {
     return
   }
 
+  // 2. If --if-pid was given, only stop if PID matches
+  if (ifPid !== null && session.pid !== ifPid) {
+    // A different session took over — don't kill it
+    return
+  }
+
   const runDir = session.runDir
 
-  // 2. Read status for process PIDs
+  // 3. Read status for process PIDs
   const status = readStatus(runDir)
   if (status) {
-    // 3. Kill claude process and FIFO writer, waiting for exit
+    // 4. Kill claude process and FIFO writer, waiting for exit
     waitForProcessExit(status.claudePid, 5000)
     waitForProcessExit(status.callPid, 2000)
   } else {
@@ -589,13 +600,13 @@ async function callStop(): Promise<void> {
     waitForProcessExit(session.pid, 5000)
   }
 
-  // 4. Release voice lock
+  // 5. Release voice lock
   releaseVoiceLock(session.pid)
 
-  // 5. Clean up run dir
+  // 6. Clean up run dir
   cleanupRunDir(runDir)
 
-  // 6. Print status
+  // 7. Print status
   writeln('Call session stopped')
 }
 
