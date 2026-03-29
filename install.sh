@@ -2,12 +2,23 @@
 set -euo pipefail
 
 # claude-call installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/liorrutenberg/claude-call/main/install.sh | bash
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/liorrutenberg/claude-call/main/install.sh | bash
+#   curl ... | bash -s -- --branch feat/my-branch
 
 REPO="https://github.com/liorrutenberg/claude-call.git"
 INSTALL_DIR="$HOME/.claude-call/app"
 BIN_DIR="/usr/local/bin"
 BIN_NAME="claude-call"
+BRANCH="main"
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --branch|-b) BRANCH="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 
 info() { printf "\033[1m%s\033[0m\n" "$1"; }
 ok()   { printf "\033[32m%s\033[0m\n" "$1"; }
@@ -21,7 +32,7 @@ command -v git  >/dev/null 2>&1 || err "git is required."
 NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])')
 [ "$NODE_MAJOR" -ge 18 ] 2>/dev/null || err "Node.js 18+ required (found v$(node -v))"
 
-info "Installing claude-call..."
+info "Installing claude-call (branch: $BRANCH)..."
 echo
 
 # ─── Clone or update ─────────────────────────────────────────
@@ -29,12 +40,14 @@ echo
 if [ -d "$INSTALL_DIR/.git" ]; then
   info "Updating existing installation..."
   cd "$INSTALL_DIR"
-  git pull --quiet
+  git fetch --quiet origin
+  git checkout --quiet "$BRANCH"
+  git pull --quiet origin "$BRANCH"
 else
   info "Cloning repository..."
   rm -rf "$INSTALL_DIR"
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --quiet --depth 1 "$REPO" "$INSTALL_DIR"
+  git clone --quiet --branch "$BRANCH" --depth 1 "$REPO" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 fi
 
@@ -44,7 +57,7 @@ info "Installing dependencies..."
 npm install --silent 2>/dev/null
 
 info "Building..."
-npx tsc
+npx tsc && npx tsc -p tsconfig.tui.json
 
 # ─── Symlink binary ─────────────────────────────────────────
 
@@ -75,6 +88,7 @@ fi
 echo
 echo "Next steps:"
 echo
-echo "  claude-call install    # once, global"
-echo "  claude-call init       # per project"
+echo "  claude-call install    # deps, models, skills, PATH"
+echo "  claude-call init       # per project (optional)"
+echo "  eld                    # start Claude + voice"
 echo
