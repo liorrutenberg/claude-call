@@ -368,11 +368,28 @@ async function callStart(): Promise<void> {
   // 1. Determine project root
   const projectRoot = findProjectRoot() ?? process.cwd()
 
-  // 2. Get run dir and ensure it exists
+  // 2. Check ALL run dirs — only one voice session allowed globally (mic is shared)
+  const runsDir = join(loadConfig().dataDir, 'runs')
+  if (existsSync(runsDir)) {
+    for (const entry of readdirSync(runsDir)) {
+      const existingRunDir = join(runsDir, entry)
+      const existingHolder = getLockHolder(existingRunDir)
+      if (existingHolder !== null) {
+        const existingStatus = readStatus(existingRunDir)
+        const project = existingStatus?.projectRoot ?? 'unknown'
+        writeln(`Call session already running (PID ${existingHolder}, project: ${project})`)
+        writeln('Only one voice session can be active at a time (shared mic).')
+        writeln('Stop it first: claude-call call stop')
+        process.exit(1)
+      }
+    }
+  }
+
+  // 3. Get run dir and ensure it exists
   const runDir = getRunDir(projectRoot)
   ensureRunDir(runDir)
 
-  // 3. Acquire lock early with launcher PID (prevents race conditions)
+  // 4. Acquire lock
   const lockHolder = getLockHolder(runDir)
   if (lockHolder !== null) {
     writeln(`Call session already running (PID ${lockHolder})`)
