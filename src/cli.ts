@@ -1086,8 +1086,14 @@ async function uninstall(): Promise<void> {
     try {
       rmSync(item.path, { recursive: true, force: true })
       writeln(`  \x1b[32mRemoved\x1b[0m ${item.path}`)
-    } catch (err) {
-      writeln(`  \x1b[31mFailed\x1b[0m ${item.path}: ${(err as Error).message}`)
+    } catch {
+      // May need sudo for /usr/local/bin symlink
+      try {
+        spawnSync('sudo', ['rm', '-rf', item.path], { stdio: 'inherit' })
+        writeln(`  \x1b[32mRemoved\x1b[0m ${item.path}`)
+      } catch (err2) {
+        writeln(`  \x1b[31mFailed\x1b[0m ${item.path}: ${(err2 as Error).message}`)
+      }
     }
   }
 

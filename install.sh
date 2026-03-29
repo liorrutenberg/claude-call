@@ -15,7 +15,7 @@ BRANCH="main"
 # Parse args
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --branch|-b) BRANCH="$2"; shift 2 ;;
+    --branch|-b) BRANCH="${2:?--branch requires a value}"; shift 2 ;;
     *) shift ;;
   esac
 done
