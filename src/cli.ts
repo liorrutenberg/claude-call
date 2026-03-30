@@ -1177,12 +1177,31 @@ async function monitor(): Promise<void> {
 // ─── Enroll command ────────────────────────────────────────
 
 async function enroll(): Promise<void> {
+  const { enrollSpeaker } = await import('./voice/speaker.js')
+
+  // Check sherpa availability BEFORE recording samples
+  try {
+    const sherpa = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+    if (!sherpa) throw new Error()
+  } catch {
+    writeln('sherpa-onnx-node is not installed. Run: npm install sherpa-onnx-node')
+    process.exit(1)
+  }
+
+  const { existsSync: fileExists } = await import('node:fs')
+  const config = (await import('./config.js')).loadConfig()
+  if (!fileExists(config.speaker.modelPath)) {
+    writeln(`Speaker model not found at ${config.speaker.modelPath}`)
+    writeln('Run: claude-call install   (downloads the WeSpeaker model)')
+    process.exit(1)
+  }
+
   writeln('Voice enrollment — record 3 samples of 5-10 seconds each.')
   writeln('Speak naturally. Vary your tone slightly between samples.\n')
 
   const { initVAD } = await import('./voice/vad.js')
   const { recordUtterance } = await import('./voice/recorder.js')
-  const { enrollSpeaker } = await import('./voice/speaker.js')
+  const { unlinkSync } = await import('node:fs')
 
   await initVAD()
 
@@ -1203,9 +1222,16 @@ async function enroll(): Promise<void> {
   writeln('\nProcessing embeddings...')
   const result = await enrollSpeaker(wavPaths)
 
+  // Clean up sample WAV files
+  for (const p of wavPaths) {
+    try { unlinkSync(p) } catch { /* ignore */ }
+  }
+
   if (result.success) {
-    writeln('Voice profile saved. Speaker verification enabled.')
-    writeln('  Set speaker.enabled: true in config to activate.')
+    writeln('Voice profile saved.')
+    writeln('To activate, add to ~/.claude-call/config.yaml:')
+    writeln('  speaker:')
+    writeln('    enabled: true')
   } else {
     writeln(`Enrollment failed: ${result.error}`)
   }
@@ -1220,6 +1246,7 @@ async function calibrate(): Promise<void> {
   const { initVAD } = await import('./voice/vad.js')
   const { recordUtterance } = await import('./voice/recorder.js')
   const { computeRmsFromWav } = await import('./voice/volume.js')
+  const { unlinkSync } = await import('node:fs')
 
   await initVAD()
 
@@ -1231,6 +1258,8 @@ async function calibrate(): Promise<void> {
   }
 
   const rms = computeRmsFromWav(wavPath)
+  try { unlinkSync(wavPath) } catch { /* ignore */ }
+
   const threshold = rms * 0.6  // 60% of average speaking volume
 
   writeln(`\nYour average RMS: ${rms.toFixed(4)}`)

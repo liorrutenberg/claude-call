@@ -523,6 +523,7 @@ async function voiceLoop(): Promise<void> {
         const rms = computeRmsFromWav(wavPath)
         if (rms < volumeConfig.minRms) {
           log(`volume gate rejected: rms=${rms.toFixed(4)} < threshold=${volumeConfig.minRms}`)
+          try { unlinkSync(wavPath) } catch { /* ignore */ }
           continue
         }
       }
@@ -531,6 +532,7 @@ async function voiceLoop(): Promise<void> {
       const { verifySpeaker } = await import('./voice/speaker.js')
       if (!(await verifySpeaker(wavPath))) {
         log('speaker verification rejected: not the enrolled speaker')
+        try { unlinkSync(wavPath) } catch { /* ignore */ }
         continue
       }
 

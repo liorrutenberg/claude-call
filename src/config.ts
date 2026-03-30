@@ -246,6 +246,11 @@ export function loadConfig(): Config {
   const config = merge(base, yaml)
   applyEnvOverrides(config)
 
+  // Expand ~ in paths
+  if (config.speaker.modelPath.startsWith('~')) {
+    config.speaker.modelPath = config.speaker.modelPath.replace('~', homedir())
+  }
+
   cached = config
   return config
 }
