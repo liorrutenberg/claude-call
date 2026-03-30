@@ -8,8 +8,8 @@
 #   # Agent dispatch (monitor + main screen):
 #   display-push --dispatch --agent sync
 #
-#   # Agent completion (monitor + main screen):
-#   display-push --complete --agent sync
+#   # Agent completion with summary (monitor + main screen):
+#   display-push --complete --agent sync --summary "Found 3 upcoming events"
 #
 #   # With explicit correlation ID:
 #   display-push --dispatch --agent sync --id sync-123
@@ -25,6 +25,7 @@ URL="http://localhost:${PORT}/display"
 AGENT_NAME=""
 AGENT_EVENT=""
 AGENT_ID=""
+AGENT_SUMMARY=""
 SCREEN_TEXT=""
 
 while [[ $# -gt 0 ]]; do
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --dispatch) AGENT_EVENT="dispatch"; shift ;;
     --complete) AGENT_EVENT="complete"; shift ;;
     --id)       AGENT_ID="$2"; shift 2 ;;
+    --summary)  AGENT_SUMMARY="$2"; shift 2 ;;
     --screen)   SCREEN_TEXT="$2"; shift 2 ;;
     --port)     PORT="$2"; URL="http://localhost:${PORT}/display"; shift 2 ;;
     *)          echo "Unknown option: $1" >&2; exit 1 ;;
@@ -63,11 +65,21 @@ if [[ -z "$AGENT_ID" ]]; then
   AGENT_ID="${AGENT_NAME}-${TS}"
 fi
 
-PAYLOAD=$(jq -nc \
-  --arg event "$AGENT_EVENT" \
-  --arg name "$AGENT_NAME" \
-  --arg id "$AGENT_ID" \
-  --arg ts "$TS" \
-  '{ agent: { event: $event, name: $name, id: $id, ts: $ts } }')
+if [[ -n "$AGENT_SUMMARY" ]]; then
+  PAYLOAD=$(jq -nc \
+    --arg event "$AGENT_EVENT" \
+    --arg name "$AGENT_NAME" \
+    --arg id "$AGENT_ID" \
+    --arg ts "$TS" \
+    --arg summary "$AGENT_SUMMARY" \
+    '{ agent: { event: $event, name: $name, id: $id, ts: $ts, summary: $summary } }')
+else
+  PAYLOAD=$(jq -nc \
+    --arg event "$AGENT_EVENT" \
+    --arg name "$AGENT_NAME" \
+    --arg id "$AGENT_ID" \
+    --arg ts "$TS" \
+    '{ agent: { event: $event, name: $name, id: $id, ts: $ts } }')
+fi
 
 exec curl -s -X POST "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD"

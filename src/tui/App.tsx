@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
+import { AgentDetail } from './AgentDetail.js'
 import { SessionInfo } from './SessionInfo.js'
 import { Settings, getSettingsCount, handleSettingsInput } from './Settings.js'
 import { readMonitorState } from './state.js'
@@ -25,6 +26,8 @@ export function App() {
   const [state, setState] = useState<MonitorState>(emptyState)
   const [showSettings, setShowSettings] = useState(false)
   const [settingsIdx, setSettingsIdx] = useState(0)
+  const [agentIdx, setAgentIdx] = useState(-1)
+  const [viewingAgent, setViewingAgent] = useState(false)
 
   useEffect(() => {
     setState(readMonitorState())
@@ -38,6 +41,7 @@ export function App() {
     // Toggle settings panel
     if (input === 's') {
       setShowSettings(prev => !prev)
+      setViewingAgent(false)
       return
     }
 
@@ -51,9 +55,29 @@ export function App() {
       } else if (key.return || key.leftArrow || key.rightArrow) {
         const action = key.return ? 'return' : key.leftArrow ? 'left' : 'right'
         handleSettingsInput(action, settingsIdx)
-        // Force re-render with fresh state
         setState(readMonitorState())
       }
+      return
+    }
+
+    // Agent navigation
+    const agentCount = state.agents.length
+    if (agentCount > 0) {
+      if (key.upArrow) {
+        setAgentIdx(prev => prev <= 0 ? agentCount - 1 : prev - 1)
+        return
+      } else if (key.downArrow) {
+        setAgentIdx(prev => prev >= agentCount - 1 ? 0 : prev + 1)
+        return
+      } else if (key.return && agentIdx >= 0 && agentIdx < agentCount) {
+        setViewingAgent(prev => !prev)
+        return
+      }
+    }
+
+    // Escape closes detail pane
+    if (key.escape) {
+      setViewingAgent(false)
       return
     }
 
@@ -71,14 +95,17 @@ export function App() {
     }
   })
 
+  const selectedAgent = agentIdx >= 0 && agentIdx < state.agents.length ? state.agents[agentIdx] : null
+
   return (
     <Box flexDirection="column" padding={1}>
       <Text bold>claude-call monitor</Text>
       <Box marginTop={1} />
       <VoiceStatus connected={state.connected} status={state.status} />
-      <AgentList agents={state.agents} />
+      <AgentList agents={state.agents} selectedIndex={agentIdx} />
       <SessionInfo state={state} />
       {showSettings && <Settings selectedIndex={settingsIdx} />}
+      {viewingAgent && selectedAgent && <AgentDetail agent={selectedAgent} />}
       {!state.connected && (
         <Box marginTop={1}>
           <Text dimColor>Waiting for call session...</Text>
@@ -86,7 +113,10 @@ export function App() {
       )}
       {!showSettings && (
         <Box marginTop={1}>
-          <Text dimColor>{state.connected ? '[m] mute/unmute  [s] settings' : '[s] settings'}</Text>
+          <Text dimColor>
+            {state.connected ? '[m] mute  [s] settings' : '[s] settings'}
+            {state.agents.length > 0 ? '  [\u2191\u2193] agents  [\u23CE] inspect' : ''}
+          </Text>
         </Box>
       )}
     </Box>
