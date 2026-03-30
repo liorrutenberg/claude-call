@@ -54,6 +54,13 @@ export const MODELS: Record<string, ModelInfo> = {
     sizeHint: '~5 KB',
     required: false,
   },
+  'speaker-resnet34': {
+    name: 'WeSpeaker ResNet34-LM (Speaker Verification)',
+    filename: 'wespeaker_en_voxceleb_resnet34_LM.onnx',
+    url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx',
+    sizeHint: '~25.3 MB',
+    required: false,
+  },
 }
 
 function followRedirects(url: string, maxRedirects = 5): Promise<IncomingMessage> {

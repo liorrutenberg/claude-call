@@ -49,6 +49,17 @@ export interface WakeWordConfig {
   enabled: boolean
 }
 
+export interface VolumeGateConfig {
+  enabled: boolean
+  minRms: number  // 0-1 float, minimum RMS amplitude to process. 0 = disabled
+}
+
+export interface SpeakerConfig {
+  enabled: boolean
+  threshold: number  // cosine similarity threshold (0-1), default 0.55
+  modelPath: string  // path to speaker embedding ONNX model
+}
+
 export interface Config {
   dataDir: string
   tts: TtsConfig
@@ -58,6 +69,8 @@ export interface Config {
   pronunciation: PronunciationConfig
   feedback: FeedbackConfig
   wakeWord: WakeWordConfig
+  volumeGate: VolumeGateConfig
+  speaker: SpeakerConfig
 }
 
 // ─── Defaults ───────────────────────────────────────────────
@@ -95,6 +108,15 @@ function defaults(): Config {
     wakeWord: {
       enabled: false,
     },
+    volumeGate: {
+      enabled: false,
+      minRms: 0,
+    },
+    speaker: {
+      enabled: false,
+      threshold: 0.55,
+      modelPath: join(DATA_DIR, 'models', 'wespeaker_en_voxceleb_resnet34_LM.onnx'),
+    },
   }
 }
 
@@ -109,6 +131,8 @@ interface YamlConfig {
   pronunciation?: Partial<PronunciationConfig>
   feedback?: Partial<FeedbackConfig>
   wakeWord?: Partial<WakeWordConfig>
+  volumeGate?: Partial<VolumeGateConfig>
+  speaker?: Partial<SpeakerConfig>
 }
 
 function loadYaml(path: string): YamlConfig {
@@ -170,6 +194,24 @@ function applyEnvOverrides(config: Config): void {
 
   const wakeWordEnabled = env('WAKE_WORD_ENABLED')
   if (wakeWordEnabled !== undefined) config.wakeWord.enabled = wakeWordEnabled !== 'false' && wakeWordEnabled !== '0'
+
+  const volumeGateMinRms = env('VOLUME_GATE_MIN_RMS')
+  if (volumeGateMinRms) {
+    const parsed = parseFloat(volumeGateMinRms)
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+      config.volumeGate.minRms = parsed
+      if (parsed > 0) config.volumeGate.enabled = true
+    }
+  }
+
+  const speakerEnabled = env('SPEAKER_ENABLED')
+  if (speakerEnabled !== undefined) config.speaker.enabled = speakerEnabled !== 'false' && speakerEnabled !== '0'
+
+  const speakerThreshold = env('SPEAKER_THRESHOLD')
+  if (speakerThreshold) {
+    const parsed = parseFloat(speakerThreshold)
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) config.speaker.threshold = parsed
+  }
 }
 
 // ─── Merge ──────────────────────────────────────────────────
@@ -186,6 +228,8 @@ function merge(base: Config, yaml: YamlConfig): Config {
     pronunciation: { ...base.pronunciation, ...yaml.pronunciation },
     feedback: { ...base.feedback, ...yaml.feedback },
     wakeWord: { ...base.wakeWord, ...yaml.wakeWord },
+    volumeGate: { ...base.volumeGate, ...yaml.volumeGate },
+    speaker: { ...base.speaker, ...yaml.speaker },
   }
 }
 

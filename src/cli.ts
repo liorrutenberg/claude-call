@@ -1174,6 +1174,73 @@ async function monitor(): Promise<void> {
   await import(tuiPath)
 }
 
+// ─── Enroll command ────────────────────────────────────────
+
+async function enroll(): Promise<void> {
+  writeln('Voice enrollment — record 3 samples of 5-10 seconds each.')
+  writeln('Speak naturally. Vary your tone slightly between samples.\n')
+
+  const { initVAD } = await import('./voice/vad.js')
+  const { recordUtterance } = await import('./voice/recorder.js')
+  const { enrollSpeaker } = await import('./voice/speaker.js')
+
+  await initVAD()
+
+  const wavPaths: string[] = []
+
+  for (let i = 1; i <= 3; i++) {
+    writeln(`Sample ${i}/3: Speak now...`)
+    const wavPath = await recordUtterance({ silenceMode: 'thoughtful' })
+    if (!wavPath) {
+      writeln('  No speech detected. Try again.')
+      i--
+      continue
+    }
+    wavPaths.push(wavPath)
+    writeln('  Got it.')
+  }
+
+  writeln('\nProcessing embeddings...')
+  const result = await enrollSpeaker(wavPaths)
+
+  if (result.success) {
+    writeln('Voice profile saved. Speaker verification enabled.')
+    writeln('  Set speaker.enabled: true in config to activate.')
+  } else {
+    writeln(`Enrollment failed: ${result.error}`)
+  }
+}
+
+// ─── Calibrate command ─────────────────────────────────────
+
+async function calibrate(): Promise<void> {
+  writeln('Volume calibration — speak normally for 5 seconds.')
+  writeln('This sets the minimum volume threshold for voice filtering.\n')
+
+  const { initVAD } = await import('./voice/vad.js')
+  const { recordUtterance } = await import('./voice/recorder.js')
+  const { computeRmsFromWav } = await import('./voice/volume.js')
+
+  await initVAD()
+
+  writeln('Speak now...')
+  const wavPath = await recordUtterance({ silenceMode: 'thoughtful' })
+  if (!wavPath) {
+    writeln('No speech detected. Try again.')
+    return
+  }
+
+  const rms = computeRmsFromWav(wavPath)
+  const threshold = rms * 0.6  // 60% of average speaking volume
+
+  writeln(`\nYour average RMS: ${rms.toFixed(4)}`)
+  writeln(`Recommended threshold: ${threshold.toFixed(4)}`)
+  writeln('\nAdd to ~/.claude-call/config.yaml:')
+  writeln('  volumeGate:')
+  writeln('    enabled: true')
+  writeln(`    minRms: ${threshold.toFixed(4)}`)
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 const command = process.argv[2]
@@ -1218,6 +1285,20 @@ switch (command) {
   case 'monitor':
     monitor().catch((err) => {
       writeln(`\nMonitor failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
+  case 'enroll':
+    enroll().catch((err) => {
+      writeln(`\nEnroll failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
+  case 'calibrate':
+    calibrate().catch((err) => {
+      writeln(`\nCalibrate failed: ${(err as Error).message}`)
       process.exit(1)
     })
     break
@@ -1295,6 +1376,8 @@ switch (command) {
     writeln('  check           Verify dependencies and models')
     writeln('  monitor         Interactive status panel (TUI)')
     writeln('  serve           Start MCP channel server (used by Claude Code)')
+    writeln('  enroll          Record voice samples for speaker verification')
+    writeln('  calibrate       Set volume threshold for voice filtering')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
     writeln('  call mute       Mute the call session')

@@ -516,6 +516,24 @@ async function voiceLoop(): Promise<void> {
 
       if (!wavPath) continue
 
+      // Volume gate — reject quiet audio (background noise picked up by VAD)
+      const volumeConfig = loadConfig().volumeGate
+      if (volumeConfig.enabled && volumeConfig.minRms > 0) {
+        const { computeRmsFromWav } = await import('./voice/volume.js')
+        const rms = computeRmsFromWav(wavPath)
+        if (rms < volumeConfig.minRms) {
+          log(`volume gate rejected: rms=${rms.toFixed(4)} < threshold=${volumeConfig.minRms}`)
+          continue
+        }
+      }
+
+      // Speaker verification — reject audio from non-enrolled speaker
+      const { verifySpeaker } = await import('./voice/speaker.js')
+      if (!(await verifySpeaker(wavPath))) {
+        log('speaker verification rejected: not the enrolled speaker')
+        continue
+      }
+
       log(`recording took ${t1 - t0}ms`)
 
       if (ttsMuted) {

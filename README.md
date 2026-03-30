@@ -38,6 +38,10 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Display push** — Call session pushes agent monitor events to the main session via MCP channel notification
 - **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/unmute chime, mute chime — so you always know the system state
 
+### Voice Filtering
+- **Volume gate** — RMS amplitude filter rejects background noise (configurable threshold via `claude-call calibrate`)
+- **Speaker verification** — Optional voice ID using WeSpeaker embeddings; only processes the enrolled speaker's voice (`claude-call enroll`)
+
 ### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
 - **Echo suppression** — Recording automatically mutes during TTS playback
@@ -166,6 +170,15 @@ interrupt:
 
 pronunciation:
   file: ""            # path to custom pronunciation.yaml
+
+volumeGate:
+  enabled: false      # enable RMS volume gate
+  minRms: 0           # minimum RMS amplitude (0-1), use `claude-call calibrate` to set
+
+speaker:
+  enabled: false      # enable speaker verification
+  threshold: 0.55     # cosine similarity threshold (0-1)
+  modelPath: ~/.claude-call/models/wespeaker_en_voxceleb_resnet34_LM.onnx
 ```
 
 ### Environment Variables
@@ -182,6 +195,9 @@ pronunciation:
 | `CLAUDE_CALL_INTERRUPT_KEYWORDS` | Comma-separated interrupt keywords |
 | `CLAUDE_CALL_PRONUNCIATION_FILE` | Custom pronunciation YAML path |
 | `CLAUDE_CALL_DATA_DIR` | Data directory (default: ~/.claude-call) |
+| `CLAUDE_CALL_VOLUME_GATE_MIN_RMS` | Volume gate RMS threshold (0-1, enables gate if > 0) |
+| `CLAUDE_CALL_SPEAKER_ENABLED` | Enable speaker verification |
+| `CLAUDE_CALL_SPEAKER_THRESHOLD` | Speaker verification cosine similarity threshold |
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 
@@ -279,6 +295,8 @@ claude-call init        # Per-project setup (.mcp.json)
 claude-call uninstall   # Remove everything (--dry-run to preview)
 claude-call check       # Verify dependencies and models
 claude-call serve       # Start MCP server (used by Claude Code)
+claude-call enroll      # Record voice samples for speaker verification
+claude-call calibrate   # Set volume threshold for voice filtering
 claude-call call start  # Start a voice call session
 claude-call call stop   # Stop the current call session
 claude-call call mute   # Mute voice input (agents keep running)

@@ -29,6 +29,11 @@ The main loop in `channel.ts` runs continuously:
 │   │  └─ VAD detects silence (1-2.5s) → stop recording
 │   │
 │   ↓
+│   Volume gate (RMS check — reject quiet audio if enabled)
+│   │
+│   Speaker verification (cosine similarity vs enrolled profile if enabled)
+│   │
+│   ↓
 │   Final transcription (Whisper, beam search + domain prompt)
 │   │
 │   Filter junk transcripts ("thank you", "thanks for watching", etc.)
@@ -135,6 +140,12 @@ Silero VAD (512-sample chunks)
     ├─ Speech detected → start preview timer
     │   ├─ Every 600ms → rolling window → transcribeFast → log partial
     │   └─ Silence for 1-2.5s → utterance complete
+    │
+    ↓
+Volume gate (reject if RMS < threshold, opt-in)
+    │
+    ↓
+Speaker verification (reject if not enrolled speaker, opt-in)
     │
     ↓
 Whisper STT (full utterance, beam search)
