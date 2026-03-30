@@ -40,6 +40,7 @@ import {
   playMuteChime,
   playSpeechStartBeep,
   playSpeechEndBeep,
+  playInterruptChime,
   startThinkingPulse,
   stopThinkingPulse,
   stopAllFeedback,
@@ -359,6 +360,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
                 interrupted = true
                 stopSpeaking()
                 flushSpeakQueue() // Cancel all pending speak items
+                playInterruptChime()
                 log(`keyword interrupt: "${raw}"`)
               }
             } catch (err) {
@@ -489,6 +491,7 @@ async function voiceLoop(): Promise<void> {
       }
 
       if (isMuted()) {
+        stopThinkingPulse()
         await waitForUnmute()
         if (isMuted()) continue // still muted somehow
         playStartChime()
@@ -561,10 +564,14 @@ async function voiceLoop(): Promise<void> {
 
       // Speaker verification — reject audio from non-enrolled speaker
       const { verifySpeaker } = await import('./voice/speaker.js')
-      if (!(await verifySpeaker(wavPath))) {
-        log('speaker verification rejected: not the enrolled speaker')
+      const sv = await verifySpeaker(wavPath)
+      if (!sv.pass) {
+        log(`speaker rejected: similarity=${sv.similarity?.toFixed(4) ?? 'n/a'} threshold=${config.speaker.threshold}`)
         try { unlinkSync(wavPath) } catch { /* ignore */ }
         continue
+      }
+      if (sv.similarity !== undefined) {
+        log(`speaker accepted: similarity=${sv.similarity.toFixed(4)}`)
       }
 
       log(`recording took ${t1 - t0}ms`)
@@ -602,6 +609,7 @@ async function voiceLoop(): Promise<void> {
       // Soft mute trigger — "exo mute" keeps mic alive but stops processing
       // Must check BEFORE wake word stripping so "exo mute" matches
       if (matchesMute(text)) {
+        stopThinkingPulse()
         playMuteChime()
         log(`mute triggered: "${text}"`)
         const muteRunDir = getRunDirFromEnv()

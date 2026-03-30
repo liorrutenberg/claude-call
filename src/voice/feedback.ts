@@ -134,6 +134,22 @@ export function playSpeechEndBeep(): void {
   ], 'speech end beep')
 }
 
+// ─── Interrupt Chime ─────────────────────────────────────────
+
+/**
+ * Short descending blip — confirms interrupt was acknowledged.
+ */
+export function playInterruptChime(): void {
+  const vol = getVolume() * 0.7
+  playToneAsync([
+    '-n', '-q',
+    'synth', '0.06', 'sine', '700', ':',
+    'synth', '0.06', 'sine', '400',
+    'vol', String(vol),
+    'fade', 'q', '0.01', '-0', '0.01',
+  ], 'interrupt chime')
+}
+
 // ─── Thinking Pulse ──────────────────────────────────────────
 
 /**

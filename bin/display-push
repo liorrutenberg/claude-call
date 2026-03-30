@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# display-push — POST monitor events to the call-display server.
+# display-push — Push messages and events to the call-display server.
 #
 # Usage:
-#   # Dispatch event (monitor shows agent running):
+#   # Push text to the main screen:
+#   display-push --screen "Build passed, all 47 tests green"
+#
+#   # Agent dispatch (monitor + main screen):
 #   display-push --dispatch --agent sync
 #
-#   # Completion event (monitor shows agent done):
+#   # Agent completion (monitor + main screen):
 #   display-push --complete --agent sync
 #
-#   # With explicit correlation ID (dispatch and complete must match):
+#   # With explicit correlation ID:
 #   display-push --dispatch --agent sync --id sync-123
 #   display-push --complete --agent sync --id sync-123
 #
@@ -22,6 +25,7 @@ URL="http://localhost:${PORT}/display"
 AGENT_NAME=""
 AGENT_EVENT=""
 AGENT_ID=""
+SCREEN_TEXT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,13 +33,21 @@ while [[ $# -gt 0 ]]; do
     --dispatch) AGENT_EVENT="dispatch"; shift ;;
     --complete) AGENT_EVENT="complete"; shift ;;
     --id)       AGENT_ID="$2"; shift 2 ;;
+    --screen)   SCREEN_TEXT="$2"; shift 2 ;;
     --port)     PORT="$2"; URL="http://localhost:${PORT}/display"; shift 2 ;;
     *)          echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
+# ─── Screen text mode ───────────────────────────────────────
+if [[ -n "$SCREEN_TEXT" ]]; then
+  PAYLOAD=$(jq -nc --arg text "$SCREEN_TEXT" '{ text: $text }')
+  exec curl -s -X POST "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD"
+fi
+
+# ─── Agent event mode ───────────────────────────────────────
 if [[ -z "$AGENT_NAME" ]]; then
-  echo "Error: --agent NAME is required" >&2
+  echo "Error: --agent NAME or --screen TEXT is required" >&2
   exit 1
 fi
 

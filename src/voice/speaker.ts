@@ -121,23 +121,21 @@ export async function extractEmbedding(wavPath: string): Promise<Float32Array | 
  * Verify if a WAV file matches the enrolled speaker.
  * Returns true if speaker matches or verification is not configured.
  */
-export async function verifySpeaker(wavPath: string): Promise<boolean> {
+export async function verifySpeaker(wavPath: string): Promise<{ pass: boolean; similarity?: number }> {
   const config = loadConfig()
-  if (!config.speaker.enabled) return true  // not enabled = pass through
+  if (!config.speaker.enabled) return { pass: true }
 
-  if (!(await ensureSherpa())) return true  // sherpa not available = pass through
+  if (!(await ensureSherpa())) return { pass: true }
 
   const savedProfile = loadProfile()
-  if (!savedProfile) return true  // no profile enrolled = pass through
+  if (!savedProfile) return { pass: true }
 
   const embedding = await extractEmbedding(wavPath)
-  if (!embedding) return true  // extraction failed = pass through (don't block)
+  if (!embedding) return { pass: true }
 
   const similarity = cosineSimilarity(embedding, savedProfile.embedding)
   const pass = similarity >= config.speaker.threshold
-  // Log to stderr for channel.log visibility
-  process.stderr.write(`[${new Date().toISOString()}] [speaker] similarity=${similarity.toFixed(4)} threshold=${config.speaker.threshold} ${pass ? 'PASS' : 'REJECT'}\n`)
-  return pass
+  return { pass, similarity }
 }
 
 /**

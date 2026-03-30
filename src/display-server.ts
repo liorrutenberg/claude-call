@@ -92,7 +92,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // Write agent event if present (best-effort)
       writeAgentEvent(agent)
 
-      // Allow agent-only POSTs (no text field required)
+      // Agent-only POSTs: write to agents.jsonl, no MCP notification
       if (typeof text !== 'string' || !text) {
         if (agent) {
           res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -100,10 +100,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           return
         }
         res.writeHead(400, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'missing text field' }))
+        res.end(JSON.stringify({ error: 'missing text or agent field' }))
         return
       }
 
+      // Text messages: push to main screen via MCP channel
       await mcp.notification({
         method: 'notifications/claude/channel',
         params: { channel: 'call-display', content: text },
