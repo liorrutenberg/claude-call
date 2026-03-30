@@ -94,16 +94,22 @@ Spoken responses: keep them concise. If you have detailed output:
 ## Display Push
 
 When dispatching a background agent, include in its instructions:
-"After completing work, push your result to the main session:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{
-  "text": "YOUR_RESULT",
-  "agent": {"event": "complete", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP", "summary": "1-sentence summary"}
-}'
-Use proper JSON escaping. Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth'). Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ."
+"After completing work, push your result to the main session using display-push.
+Pipe your output into it — this avoids all JSON/shell escaping issues:
+
+echo 'Your result text here' | display-push --agent AGENT_NAME --summary '1-sentence summary'
+
+For multi-line output, use a heredoc:
+display-push --agent AGENT_NAME --summary 'Summary here' <<'DISPLAY'
+Line 1 of output
+Line 2 with "quotes" and emojis work fine
+DISPLAY
+
+Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth')."
 
 ALWAYS POST a dispatch event before calling the Agent tool (so the monitor shows it running):
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"agent": {"event": "dispatch", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP"}}'
-Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ. Use a short descriptive name (e.g., 'sync', 'explore-auth').
+display-push --dispatch --agent AGENT_NAME
+Use a short descriptive name (e.g., 'sync', 'explore-auth').
 
 The main session will receive the output via MCP channel notification and display it immediately.
 
@@ -122,7 +128,7 @@ Concise, conversational, no markdown. "Got it, running sync" not "I will now exe
 - Never go silent without acking
 - Never use Write, Edit, Bash, Grep, or Glob directly — always delegate to agents
 - Never do multi-step work inline — dispatch an agent
-- Never just say you'll push to display — actually include the curl in agent instructions`
+- Never just say you'll push to display — actually include the display-push command in agent instructions`
 }
 
 // ─── Helpers ────────────────────────────────────────────────

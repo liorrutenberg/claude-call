@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# display-push — Safely POST JSON to the call-display server.
+#
+# Solves the bash JSON escaping problem: emojis, quotes, newlines, and
+# special characters in agent output would break inline curl -d '{...}'.
+# This script uses jq to build valid JSON from raw arguments.
+#
+# Usage:
+#   # Push text (reads from stdin — no escaping needed):
+#   echo "Result with 'quotes' and emojis" | display-push
+#
+#   # Push text with agent complete event:
+#   echo "Done analyzing auth module" | display-push --agent sync --summary "Auth module analyzed"
+#
+#   # Dispatch event only (no text):
+#   display-push --dispatch --agent sync
+#
+#   # Push text from a file:
+#   display-push < /tmp/result.txt --agent explore-auth --summary "Explored auth"
+#
+# Requires: jq, curl
+
+set -euo pipefail
+
+PORT="${DISPLAY_PORT:-9847}"
+URL="http://localhost:${PORT}/display"
+
+AGENT_NAME=""
+AGENT_EVENT="complete"
+SUMMARY=""
+DISPATCH_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)   AGENT_NAME="$2"; shift 2 ;;
+    --summary) SUMMARY="$2"; shift 2 ;;
+    --dispatch) DISPATCH_ONLY=true; AGENT_EVENT="dispatch"; shift ;;
+    --port)    PORT="$2"; URL="http://localhost:${PORT}/display"; shift 2 ;;
+    *)         echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+if $DISPATCH_ONLY; then
+  # Dispatch event — no text, agent only
+  if [[ -z "$AGENT_NAME" ]]; then
+    echo "Error: --dispatch requires --agent NAME" >&2
+    exit 1
+  fi
+  PAYLOAD=$(jq -nc \
+    --arg event "$AGENT_EVENT" \
+    --arg name "$AGENT_NAME" \
+    --arg ts "$TS" \
+    '{ agent: { event: $event, name: $name, ts: $ts } }')
+else
+  # Read text from stdin
+  TEXT=$(cat)
+  if [[ -z "$TEXT" ]]; then
+    echo "Error: no text provided on stdin" >&2
+    exit 1
+  fi
+
+  if [[ -n "$AGENT_NAME" ]]; then
+    PAYLOAD=$(jq -nc \
+      --arg text "$TEXT" \
+      --arg event "$AGENT_EVENT" \
+      --arg name "$AGENT_NAME" \
+      --arg ts "$TS" \
+      --arg summary "$SUMMARY" \
+      'if $summary == "" then
+        { text: $text, agent: { event: $event, name: $name, ts: $ts } }
+      else
+        { text: $text, agent: { event: $event, name: $name, ts: $ts, summary: $summary } }
+      end')
+  else
+    PAYLOAD=$(jq -nc --arg text "$TEXT" '{ text: $text }')
+  fi
+fi
+
+exec curl -s -X POST "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD"
