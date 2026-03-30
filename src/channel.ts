@@ -53,13 +53,8 @@ const JUNK_TRANSCRIPTS = new Set([
   '', 'you', 'thank you', 'thanks', 'thanks for watching',
   'thank you for watching', 'sorry, i hid', 'sorry i hid',
   'sorry, i hit', 'sorry i hit',
-  // Common Whisper hallucinations
-  'bye', 'goodbye', 'bye bye',
+  // Filler sounds (not commands or meaningful speech)
   'hmm', 'huh', 'uh', 'um', 'ah',
-  'okay', 'ok',
-  'yeah', 'yes', 'no', 'yep', 'nope',
-  'hello', 'hi',
-  'so', 'well', 'right',
 ])
 
 // ─── Logging ────────────────────────────────────────────────
