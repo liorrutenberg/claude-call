@@ -53,6 +53,13 @@ const JUNK_TRANSCRIPTS = new Set([
   '', 'you', 'thank you', 'thanks', 'thanks for watching',
   'thank you for watching', 'sorry, i hid', 'sorry i hid',
   'sorry, i hit', 'sorry i hit',
+  // Common Whisper hallucinations
+  'bye', 'goodbye', 'bye bye',
+  'hmm', 'huh', 'uh', 'um', 'ah',
+  'okay', 'ok',
+  'yeah', 'yes', 'no', 'yep', 'nope',
+  'hello', 'hi',
+  'so', 'well', 'right',
 ])
 
 // ─── Logging ────────────────────────────────────────────────
@@ -83,7 +90,16 @@ function normalizeText(text: string): string {
 function isMeaningful(text: string): boolean {
   const t = normalizeText(text).toLowerCase().replace(/[.,!?;:]+$/g, '')
   if (!t || t.length < 2) return false
-  return !JUNK_TRANSCRIPTS.has(t)
+  if (JUNK_TRANSCRIPTS.has(t)) return false
+
+  // Check for repetitive words (Whisper hallucination pattern)
+  const words = t.split(/\s+/)
+  if (words.length >= 3) {
+    const firstWord = words[0]
+    if (words.every(w => w === firstWord)) return false
+  }
+
+  return true
 }
 
 // ─── Soft mute ──────────────────────────────────────────────

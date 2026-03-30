@@ -34,6 +34,9 @@ const BYTES_PER_SAMPLE = 2
 /** Seconds with no speech before giving up on hearing anything. */
 const PRE_SPEECH_TIMEOUT_S = 15
 
+/** Maximum recording duration (seconds) after speech is detected. */
+const MAX_RECORDING_S = 20
+
 // ─── Audio utilities ────────────────────────────────────────
 
 let cachedNativeRate: number | null = null
@@ -324,6 +327,7 @@ export async function recordUtterance(
 
   const silenceChunksNeeded = silenceChunksForMode(silenceMode)
   const preSpeechChunks = Math.ceil(PRE_SPEECH_TIMEOUT_S * (SAMPLE_RATE / VAD_CHUNK_SAMPLES))
+  const maxRecordingChunks = Math.ceil(MAX_RECORDING_S * (SAMPLE_RATE / VAD_CHUNK_SAMPLES))
 
   await resetVAD()
   clearStopSignal()
@@ -342,6 +346,7 @@ export async function recordUtterance(
   return new Promise<string | null>((resolve, reject) => {
     let consecutiveSilent = 0
     let totalChunks = 0
+    let speechChunks = 0
     let hasSpeechDetected = false
     let speechStartFired = false
     let speechEndFired = false
@@ -494,6 +499,19 @@ export async function recordUtterance(
               }
               finish()
               return
+            }
+
+            // Cap recording duration after speech detected
+            if (hasSpeechDetected) {
+              speechChunks++
+              if (speechChunks >= maxRecordingChunks) {
+                if (!speechEndFired && onSpeechEnd) {
+                  speechEndFired = true
+                  onSpeechEnd()
+                }
+                finish()
+                return
+              }
             }
 
             if (!hasSpeechDetected && totalChunks >= preSpeechChunks) {

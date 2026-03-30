@@ -30,14 +30,17 @@ const VALID_EVENTS = ['dispatch', 'complete'] as const
 function writeAgentEvent(agent: unknown): void {
   if (!agent || typeof agent !== 'object') return
 
-  const { event, name, ts, summary } = agent as Record<string, unknown>
+  const { event, name, ts, summary, id: rawId } = agent as Record<string, unknown>
   if (typeof event !== 'string' || typeof name !== 'string' || typeof ts !== 'string') return
   if (!VALID_EVENTS.includes(event as typeof VALID_EVENTS[number])) return
 
   const runDir = resolveActiveRunDir()
   if (!runDir) return
 
-  const eventObj: Record<string, string> = { event, name, ts }
+  // Use provided id or auto-generate one for dispatch events
+  const id = typeof rawId === 'string' ? rawId : `${name}-${ts}`
+
+  const eventObj: Record<string, string> = { event, name, ts, id }
   if (typeof summary === 'string') eventObj.summary = summary
 
   try {

@@ -15,6 +15,7 @@ export interface AgentEvent {
   event: 'dispatch' | 'complete'
   name: string
   ts: string
+  id?: string
   summary?: string
 }
 
