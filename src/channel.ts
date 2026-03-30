@@ -7,7 +7,7 @@
  *   - Whisper STT (server + CLI) for transcription
  *   - TTS cascade (Piper → edge-tts → say) with sentence pipelining
  *   - Echo suppression: mutes recording during TTS playback
- *   - Keyword interrupt: detects "stop"/"wait" mid-speech to kill playback
+ *   - Keyword interrupt: detects "stop"/"pause" mid-speech to kill playback
  *   - Streaming partial transcription via rolling-window previews
  *
  * Launch: claude --mcp-config ~/.claude-call/mcp.json
@@ -172,6 +172,14 @@ let softPaused = false
 let voiceLoopRunning = false
 let sessionDead = false
 
+// Speech queue — serializes concurrent speak calls, prevents overlapping audio
+let speakQueue: Promise<void> = Promise.resolve()
+let speakGeneration = 0  // Cancel token for queue flushing
+
+function flushSpeakQueue(): void {
+  speakGeneration++
+}
+
 // ─── FIFO state (call mode) ─────────────────────────────────
 
 let fifoFd: number | null = null
@@ -285,58 +293,84 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (req.params.name === 'speak') {
     const text = (args.text as string) ?? ''
-    if (text) {
-      const speakStart = Date.now()
-      stopThinkingPulse() // Stop thinking pulse when response begins
-      log(`speaking: ${text}`)
+    if (!text) return { content: [{ type: 'text', text: 'spoken' }] }
 
-      const config = loadConfig()
-      const interruptKeywords = config.interrupt.keywords
-      let interrupted = false
-      let tFirstAudio = 0
-      const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
-
-      kwMonitor.onBurst = async (wavPath: string) => {
+    const gen = speakGeneration
+    const result = await new Promise<string>((resolve) => {
+      const task = async () => {
         try {
-          const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
-          log(`keyword check: "${raw}"`)
-          if (interruptKeywords.some(kw => raw.includes(kw))) {
-            interrupted = true
-            stopSpeaking()
-            log(`keyword interrupt: "${raw}"`)
+          // Check if cancelled (queue was flushed since we enqueued)
+          if (gen !== speakGeneration) {
+            resolve('cancelled')
+            return
           }
-        } catch (err) {
-          log(`keyword transcription error: ${(err as Error).message}`)
-        }
-      }
+          // Check if muted/paused (voice command or external signal)
+          if (softPaused || isPaused()) {
+            resolve('muted')
+            return
+          }
 
-      try {
-        await ttsSpeak(text, {
-          onMute: () => {
-            muted = true
-            triggerStop()
-            log('muted (speaking)')
-          },
-          onUnmute: () => {
-            muted = false
-            log('unmuted (done speaking)')
-          },
-          onInterruptCheck: async () => interrupted,
-          onFirstAudio: () => {
-            tFirstAudio = Date.now()
-          },
-        })
-      } finally {
-        kwMonitor.stop()
-        const speakFinish = Date.now()
-        if (tFirstAudio) {
-          log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
-        } else {
-          log(`speak: tts_total=${speakFinish - speakStart}ms`)
+          const speakStart = Date.now()
+          stopThinkingPulse() // Stop thinking pulse when response begins
+          log(`speaking: ${text}`)
+
+          const config = loadConfig()
+          const interruptKeywords = config.interrupt.keywords
+          let interrupted = false
+          let tFirstAudio = 0
+          const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
+
+          kwMonitor.onBurst = async (wavPath: string) => {
+            try {
+              const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
+              log(`keyword check: "${raw}"`)
+              if (interruptKeywords.some(kw => raw.includes(kw))) {
+                interrupted = true
+                stopSpeaking()
+                flushSpeakQueue() // Cancel all pending speak items
+                log(`keyword interrupt: "${raw}"`)
+              }
+            } catch (err) {
+              log(`keyword transcription error: ${(err as Error).message}`)
+            }
+          }
+
+          try {
+            await ttsSpeak(text, {
+              onMute: () => {
+                muted = true
+                triggerStop()
+                log('muted (speaking)')
+              },
+              onUnmute: () => {
+                muted = false
+                log('unmuted (done speaking)')
+              },
+              onInterruptCheck: async () => interrupted,
+              onFirstAudio: () => {
+                tFirstAudio = Date.now()
+              },
+            })
+          } finally {
+            kwMonitor.stop()
+            const speakFinish = Date.now()
+            if (tFirstAudio) {
+              log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
+            } else {
+              log(`speak: tts_total=${speakFinish - speakStart}ms`)
+            }
+          }
+
+          resolve('spoken')
+        } catch (err) {
+          log(`speak queue task error: ${(err as Error).message}`)
+          resolve('error')
         }
       }
-    }
-    return { content: [{ type: 'text', text: 'spoken' }] }
+      speakQueue = speakQueue.then(task, task)
+    })
+
+    return { content: [{ type: 'text', text: result }] }
   }
 
   return {
@@ -432,6 +466,7 @@ async function voiceLoop(): Promise<void> {
         silenceMode: config.silence.mode,
         onSpeechStart: () => {
           log('speech detected — listening...')
+          stopThinkingPulse() // User speaking means Claude responded (or user interrupted) — kill any lingering pulse
           playSpeechStartBeep()
           partialText = ''
           stableText = ''

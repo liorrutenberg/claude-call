@@ -344,6 +344,7 @@ export async function recordUtterance(
     let totalChunks = 0
     let hasSpeechDetected = false
     let speechStartFired = false
+    let speechEndFired = false
     const pcmChunks: Uint8Array[] = []
     let totalPcmBytes = 0
     let resolved = false
@@ -476,12 +477,21 @@ export async function recordUtterance(
 
             if (hasStopSignal()) {
               clearStopSignal()
+              // Fire onSpeechEnd if speech was detected — stop signal
+              // kills recording before natural silence detection can fire it.
+              if (hasSpeechDetected && !speechEndFired && onSpeechEnd) {
+                speechEndFired = true
+                onSpeechEnd()
+              }
               finish()
               return
             }
 
             if (hasSpeechDetected && consecutiveSilent >= silenceChunksNeeded) {
-              onSpeechEnd?.()
+              if (!speechEndFired && onSpeechEnd) {
+                speechEndFired = true
+                onSpeechEnd()
+              }
               finish()
               return
             }

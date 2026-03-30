@@ -960,7 +960,7 @@ function writeConfigFile(configPath: string, whisperSize: string, pronunciationF
       mode: 'quick' as const,
     },
     interrupt: {
-      keywords: ['stop', 'step', 'wait', 'hold on', 'pause', 'hey'],
+      keywords: ['stop', 'hold on', 'pause', 'exo'],
     },
   }
 

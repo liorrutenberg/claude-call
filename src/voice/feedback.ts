@@ -35,9 +35,9 @@ function log(msg: string): void {
 
 // ─── Active process tracking ─────────────────────────────────
 
-let thinkingInterval: NodeJS.Timeout | null = null
 let thinkingTimeout: NodeJS.Timeout | null = null
 let thinkingMaxTimeout: NodeJS.Timeout | null = null // Safety cutoff
+let pulseGeneration = 0 // Monotonic counter — incremented on every start/stop to kill orphaned callbacks
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -144,37 +144,51 @@ function playThinkingTick(): void {
 
 /**
  * Start the thinking pulse after a 500ms delay.
- * Repeats a gentle tick every 1.5 seconds until stopped.
+ * Uses recursive setTimeout tied to a generation token — each start/stop
+ * increments the generation, instantly orphaning any pending callbacks
+ * from a previous pulse without relying on clearInterval timing.
  * Auto-stops after 60 seconds as a safety cutoff.
  */
 export function startThinkingPulse(): void {
   if (!isEnabled()) return
-  stopThinkingPulse() // Clear any existing
+  stopThinkingPulse() // Clear any existing + bump generation
+
+  const gen = ++pulseGeneration // Capture token for this pulse
+
+  function scheduleNextTick(): void {
+    thinkingTimeout = setTimeout(() => {
+      if (gen !== pulseGeneration) return // Orphaned — silently die
+      playThinkingTick()
+      scheduleNextTick()
+    }, 1500)
+  }
 
   log('thinking pulse started')
+  // Initial delay before first tick
   thinkingTimeout = setTimeout(() => {
-    // Play first tick
+    if (gen !== pulseGeneration) return // Orphaned
     playThinkingTick()
-    // Then repeat every 1.5s
-    thinkingInterval = setInterval(playThinkingTick, 1500)
+    scheduleNextTick()
   }, 500)
 
   // Safety cutoff: stop after 60 seconds if never explicitly stopped
-  thinkingMaxTimeout = setTimeout(stopThinkingPulse, 60_000)
+  thinkingMaxTimeout = setTimeout(() => {
+    if (gen !== pulseGeneration) return // Stale safety timeout — ignore
+    stopThinkingPulse()
+  }, 60_000)
 }
 
 /**
  * Stop the thinking pulse immediately.
+ * Increments pulseGeneration so any pending recursive setTimeout callbacks
+ * will see a stale generation token and silently exit.
  */
 export function stopThinkingPulse(): void {
-  const wasActive = thinkingTimeout !== null || thinkingInterval !== null
+  const wasActive = thinkingTimeout !== null
+  pulseGeneration++ // Kill switch — orphan any pending callbacks
   if (thinkingTimeout) {
     clearTimeout(thinkingTimeout)
     thinkingTimeout = null
-  }
-  if (thinkingInterval) {
-    clearInterval(thinkingInterval)
-    thinkingInterval = null
   }
   if (thinkingMaxTimeout) {
     clearTimeout(thinkingMaxTimeout)
