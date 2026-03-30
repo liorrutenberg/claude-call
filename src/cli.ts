@@ -720,6 +720,10 @@ async function install(): Promise<void> {
   await downloadWithProgress(MODELS['piper-voice-config'])
   writeln()
 
+  // Speaker verification model (optional)
+  await downloadWithProgress(MODELS['speaker-resnet34'])
+  writeln()
+
   // Step 2b: Start whisper-server if available
   writeln('\x1b[1m   Starting whisper-server...\x1b[0m')
   writeln()

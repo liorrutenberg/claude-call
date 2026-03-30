@@ -50,7 +50,9 @@ function cosineSimilarity(a: number[] | Float32Array, b: number[] | Float32Array
 async function ensureSherpa(): Promise<boolean> {
   if (sherpaAvailable !== null) return sherpaAvailable
   try {
-    const sherpa = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+    const sherpaModule = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+    // Handle CJS→ESM interop: exports live on .default for CommonJS modules
+    const sherpa = sherpaModule.default ?? sherpaModule
     // Verify the model file exists
     const config = loadConfig()
     if (!existsSync(config.speaker.modelPath)) {
@@ -103,7 +105,8 @@ export async function isSpeakerVerificationReady(): Promise<boolean> {
 export async function extractEmbedding(wavPath: string): Promise<Float32Array | null> {
   if (!(await ensureSherpa()) || !extractor) return null
 
-  const { readWave } = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+  const sherpaModule = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+  const { readWave } = sherpaModule.default ?? sherpaModule
   const wave = readWave(wavPath)
 
   const stream = extractor.createStream()
