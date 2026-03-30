@@ -29,9 +29,9 @@ import {
   ensureRunDir,
   type StatusFile,
   type VoiceLock,
-  setPauseSignalIn,
-  clearPauseSignalIn,
-  hasPauseSignalIn,
+  setMuteSignalIn,
+  clearMuteSignalIn,
+  hasMuteSignalIn,
   acquireVoiceLock,
   releaseVoiceLock,
   updateVoiceLockPid,
@@ -113,8 +113,8 @@ Concise, conversational, no markdown. "Got it, running sync" not "I will now exe
 
 ## Voice Commands
 
-- "exo pause" — say "paused", then sleep
-- "exo start" — resume
+- "exo mute" — say "muted", then sleep
+- "exo unmute" / "exo start" — unmute
 - "exo" during speech — stop talking
 
 ## Don'ts
@@ -627,43 +627,43 @@ async function callStop(): Promise<void> {
 }
 
 /**
- * Pause a call session (mic stays alive, stops processing).
+ * Mute a call session (mic stays alive, stops processing).
  */
-async function callPause(): Promise<void> {
+async function callMute(): Promise<void> {
   const runDir = resolveActiveRunDir()
   if (!runDir) {
     writeln('No call session running')
     return
   }
 
-  if (hasPauseSignalIn(runDir)) {
-    writeln('Call session already paused')
+  if (hasMuteSignalIn(runDir)) {
+    writeln('Call session already muted')
     return
   }
 
-  setPauseSignalIn(runDir)
-  updateStatus(runDir, { status: 'paused' })
-  writeln('Call session paused')
+  setMuteSignalIn(runDir)
+  updateStatus(runDir, { status: 'muted' })
+  writeln('Call session muted')
 }
 
 /**
- * Resume a paused call session.
+ * Unmute a call session.
  */
-async function callResume(): Promise<void> {
+async function callUnmute(): Promise<void> {
   const runDir = resolveActiveRunDir()
   if (!runDir) {
     writeln('No call session running')
     return
   }
 
-  if (!hasPauseSignalIn(runDir)) {
-    writeln('Call session is not paused')
+  if (!hasMuteSignalIn(runDir)) {
+    writeln('Call session is not muted')
     return
   }
 
-  clearPauseSignalIn(runDir)
+  clearMuteSignalIn(runDir)
   updateStatus(runDir, { status: 'running' })
-  writeln('Call session resumed')
+  writeln('Call session unmuted')
 }
 
 /**
@@ -731,12 +731,10 @@ async function callStatus(): Promise<void> {
 
   // 4. Determine actual status
   let actualStatus: string
-  if (claudeAlive && writerAlive) {
-    actualStatus = 'running'
-  } else if (!claudeAlive && !writerAlive) {
-    actualStatus = 'crashed'
+  if (!claudeAlive || !writerAlive) {
+    actualStatus = (!claudeAlive && !writerAlive) ? 'crashed' : 'crashed (partial)'
   } else {
-    actualStatus = 'crashed (partial)'
+    actualStatus = status.status
   }
 
   // 5. Print status
@@ -1005,7 +1003,7 @@ async function uninstall(): Promise<void> {
 
   // Skill files
   if (existsSync(commandsDir)) {
-    const knownSkills = ['call-start.md', 'call-stop.md', 'call-pause.md', 'call-resume.md', 'call-status.md', 'call-prefix-on.md', 'call-prefix-off.md']
+    const knownSkills = ['call-start.md', 'call-stop.md', 'call-mute.md', 'call-unmute.md', 'call-status.md', 'call-prefix-on.md', 'call-prefix-off.md']
     const skills = readdirSync(commandsDir).filter(f => knownSkills.includes(f))
     for (const s of skills) {
       items.push({ path: join(commandsDir, s), desc: `Skill: ${s}`, exists: true })
@@ -1235,15 +1233,15 @@ switch (command) {
           process.exit(1)
         })
         break
-      case 'pause':
-        callPause().catch((err) => {
-          writeln(`\nCall pause failed: ${(err as Error).message}`)
+      case 'mute':
+        callMute().catch((err) => {
+          writeln(`\nCall mute failed: ${(err as Error).message}`)
           process.exit(1)
         })
         break
-      case 'resume':
-        callResume().catch((err) => {
-          writeln(`\nCall resume failed: ${(err as Error).message}`)
+      case 'unmute':
+        callUnmute().catch((err) => {
+          writeln(`\nCall unmute failed: ${(err as Error).message}`)
           process.exit(1)
         })
         break
@@ -1266,8 +1264,8 @@ switch (command) {
         writeln('Subcommands:')
         writeln('  start       Start a voice call session')
         writeln('  stop        Stop the current call session')
-        writeln('  pause       Pause the call session')
-        writeln('  resume      Resume a paused call session')
+        writeln('  mute        Mute the call session')
+        writeln('  unmute      Unmute the call session')
         writeln('  prefix-on   Enable "exo" wake word prefix')
         writeln('  prefix-off  Disable wake word prefix')
         writeln('  status      Show call session status')
@@ -1290,8 +1288,8 @@ switch (command) {
     writeln('  serve           Start MCP channel server (used by Claude Code)')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
-    writeln('  call pause      Pause the call session')
-    writeln('  call resume     Resume a paused call session')
+    writeln('  call mute       Mute the call session')
+    writeln('  call unmute     Unmute the call session')
     writeln('  call status     Show call session status')
     writeln()
     writeln('Quick start:')

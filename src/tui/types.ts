@@ -3,7 +3,7 @@
  */
 
 export interface StatusFile {
-  status: 'running' | 'paused' | 'crashed' | 'stopped'
+  status: 'running' | 'muted' | 'crashed' | 'stopped'
   callPid: number
   claudePid: number
   startedAt: string

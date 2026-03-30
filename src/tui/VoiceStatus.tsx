@@ -25,9 +25,9 @@ export function VoiceStatus({ connected, status }: Props) {
       color = 'green'
       label = 'listening'
       break
-    case 'paused':
-      color = 'yellow'
-      label = 'paused'
+    case 'muted':
+      color = 'cyan'
+      label = 'muted'
       break
     case 'crashed':
       color = 'red'

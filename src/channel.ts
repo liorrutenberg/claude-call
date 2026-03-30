@@ -7,7 +7,7 @@
  *   - Whisper STT (server + CLI) for transcription
  *   - TTS cascade (Piper → edge-tts → say) with sentence pipelining
  *   - Echo suppression: mutes recording during TTS playback
- *   - Keyword interrupt: detects "stop"/"pause" mid-speech to kill playback
+ *   - Keyword interrupt: detects "stop"/"mute" mid-speech to kill playback
  *   - Streaming partial transcription via rolling-window previews
  *
  * Launch: claude --mcp-config ~/.claude-call/mcp.json
@@ -30,7 +30,7 @@ import { transcribe, transcribeFast, getModelPath } from './voice/stt.js'
 import { speak as ttsSpeak, stopSpeaking } from './voice/tts.js'
 import {
   recordUtterance,
-  isPaused,
+  isMuted,
   triggerStop,
   startKeywordMonitor,
   killOwnedChildren,
@@ -86,23 +86,23 @@ function isMeaningful(text: string): boolean {
   return !JUNK_TRANSCRIPTS.has(t)
 }
 
-// ─── Soft pause ─────────────────────────────────────────────
+// ─── Soft mute ──────────────────────────────────────────────
 
-const PAUSE_PHRASES = ['exo pause', 'echo pause', 'exo paws', 'echo paws', 'exel pause', 'exo pulse', 'exopause', 'echopause', 'extra pause']
-const UNPAUSE_PHRASES = ['exo start', 'echo start', 'exo resume', 'echo resume', 'exo unpause', 'echo unpause', 'exhale start', 'exhaust start', 'exo go', 'echo go', 'exostart', 'echostart']
+const MUTE_PHRASES = ['exo mute', 'echo mute', 'exo mewt', 'echo mewt']
+const UNMUTE_PHRASES = ['exo unmute', 'echo unmute', 'exo start', 'echo start', 'exo on mute', 'echo on mute']
 
 function normalizeForMatch(text: string): string {
   return text.toLowerCase().replace(/[-,.:;!?]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function matchesPause(text: string): boolean {
+function matchesMute(text: string): boolean {
   const t = normalizeForMatch(text)
-  return PAUSE_PHRASES.some(p => t.includes(p))
+  return MUTE_PHRASES.some(p => t.includes(p))
 }
 
-function matchesUnpause(text: string): boolean {
+function matchesUnmute(text: string): boolean {
   const t = normalizeForMatch(text)
-  return UNPAUSE_PHRASES.some(p => t.includes(p))
+  return UNMUTE_PHRASES.some(p => t.includes(p))
 }
 
 // ─── Wake word filter (dual mode) ────────────────────────────
@@ -128,11 +128,11 @@ function extractAfterWakeWord(text: string): string | null {
 }
 
 /**
- * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
- * Resolves when "exo start" / "exo resume" is detected.
+ * Block the voice loop while user-muted, keeping mic alive via keyword monitor.
+ * Resolves when "exo unmute" / "exo start" is detected.
  */
-async function waitForUnpause(): Promise<void> {
-  log('soft paused — listening for unpause keyword...')
+async function waitForUnmute(): Promise<void> {
+  log('user muted — listening for unmute keyword...')
 
   const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
@@ -140,23 +140,23 @@ async function waitForUnpause(): Promise<void> {
     kwMonitor.onBurst = async (wavPath: string) => {
       try {
         const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
-        log(`unpause check: "${raw}"`)
-        if (matchesUnpause(raw)) {
-          softPaused = false
-          log('unpaused by voice command')
+        log(`unmute check: "${raw}"`)
+        if (matchesUnmute(raw)) {
+          userMuted = false
+          log('unmuted by voice command')
           const resumeRunDir = getRunDirFromEnv()
           if (resumeRunDir) updateStatus(resumeRunDir, { status: 'running' })
           kwMonitor.stop()
           resolve()
         }
       } catch (err) {
-        log(`unpause transcription error: ${(err as Error).message}`)
+        log(`unmute transcription error: ${(err as Error).message}`)
       }
     }
 
-    // Also exit if hard-paused or externally unpaused
+    // Also exit if hard-muted or externally unmuted
     const check = setInterval(() => {
-      if (!softPaused || isPaused()) {
+      if (!userMuted || isMuted()) {
         clearInterval(check)
         kwMonitor.stop()
         resolve()
@@ -167,8 +167,8 @@ async function waitForUnpause(): Promise<void> {
 
 // ─── State ──────────────────────────────────────────────────
 
-let muted = false
-let softPaused = false
+let ttsMuted = false
+let userMuted = false
 let voiceLoopRunning = false
 let sessionDead = false
 
@@ -304,8 +304,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             resolve('cancelled')
             return
           }
-          // Check if muted/paused (voice command or external signal)
-          if (softPaused || isPaused()) {
+          // Check if muted (voice command or external signal)
+          if (userMuted || isMuted()) {
             resolve('muted')
             return
           }
@@ -338,13 +338,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           try {
             await ttsSpeak(text, {
               onMute: () => {
-                muted = true
+                ttsMuted = true
                 triggerStop()
-                log('muted (speaking)')
+                log('tts muted (speaking)')
               },
               onUnmute: () => {
-                muted = false
-                log('unmuted (done speaking)')
+                ttsMuted = false
+                log('tts unmuted (done speaking)')
               },
               onInterruptCheck: async () => interrupted,
               onFirstAudio: () => {
@@ -440,22 +440,22 @@ async function voiceLoop(): Promise<void> {
     }
 
     try {
-      if (muted) {
+      if (ttsMuted) {
         await new Promise(r => setTimeout(r, 100))
         continue
       }
 
-      if (isPaused()) {
+      if (isMuted()) {
         await new Promise(r => setTimeout(r, 500))
         continue
       }
 
-      if (softPaused) {
-        await waitForUnpause()
-        if (softPaused) continue // hard pause or other exit
+      if (userMuted) {
+        await waitForUnmute()
+        if (userMuted) continue // hard mute or other exit
         playStartChime()
-        log('voice loop resumed from soft pause')
-        await deliver('[Voice resumed]')
+        log('voice loop resumed from user mute')
+        await deliver('[Voice unmuted]')
         continue
       }
 
@@ -511,7 +511,7 @@ async function voiceLoop(): Promise<void> {
 
       log(`recording took ${t1 - t0}ms`)
 
-      if (muted) {
+      if (ttsMuted) {
         try { unlinkSync(wavPath) } catch { /* ignore */ }
         continue
       }
@@ -536,27 +536,27 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
-      if (muted) {
-        log(`dropped (muted): "${text}"`)
+      if (ttsMuted) {
+        log(`dropped (tts muted): "${text}"`)
         continue
       }
 
-      // Soft pause trigger — "exo pause" keeps mic alive but stops processing
-      // Must check BEFORE wake word stripping so "exo pause" matches
-      if (matchesPause(text)) {
-        softPaused = true
+      // Soft mute trigger — "exo mute" keeps mic alive but stops processing
+      // Must check BEFORE wake word stripping so "exo mute" matches
+      if (matchesMute(text)) {
+        userMuted = true
         playPauseChime()
-        log(`soft pause triggered: "${text}"`)
-        const pauseRunDir = getRunDirFromEnv()
-        if (pauseRunDir) updateStatus(pauseRunDir, { status: 'paused' })
+        log(`soft mute triggered: "${text}"`)
+        const muteRunDir = getRunDirFromEnv()
+        if (muteRunDir) updateStatus(muteRunDir, { status: 'muted' })
         try {
-          await deliver('[Voice paused — say "exo start" to resume]')
+          await deliver('[Voice muted — say "exo unmute" to resume]')
         } catch { /* ignore */ }
         continue
       }
 
       // Wake word filter in dual mode — require "exo" prefix
-      // Applied after pause check so "exo pause" still works
+      // Applied after mute check so "exo mute" still works
       // Check both config AND runtime signal file (prefix file in run dir enables it)
       const runDirForPrefix = getRunDirFromEnv()
       const prefixEnabled = runDirForPrefix
