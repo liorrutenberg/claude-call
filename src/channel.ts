@@ -331,12 +331,29 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           const interruptKeywords = config.interrupt.keywords
           let interrupted = false
           let tFirstAudio = 0
+          let currentSentence = '' // Track what TTS is currently speaking (for echo suppression)
           const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
           kwMonitor.onBurst = async (wavPath: string) => {
             try {
               const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
               log(`keyword check: "${raw}"`)
+
+              // Echo suppression: compare burst against the sentence currently being spoken.
+              // If most words match, it's the mic picking up TTS output — suppress.
+              // Exception: explicit wake words ("exo") always pass through.
+              if (currentSentence) {
+                const burstWords = raw.split(/\s+/).filter(w => w.length > 1)
+                const sentenceWords = new Set(currentSentence.toLowerCase().split(/\s+/))
+                const overlap = burstWords.filter(w => sentenceWords.has(w)).length
+                const overlapRatio = burstWords.length > 0 ? overlap / burstWords.length : 0
+                const hasWakeWord = raw.includes('exo') || raw.includes('echo')
+                if (overlapRatio > 0.5 && !hasWakeWord) {
+                  log(`echo suppressed (${(overlapRatio * 100).toFixed(0)}% overlap): "${raw}"`)
+                  return
+                }
+              }
+
               if (interruptKeywords.some(kw => raw.includes(kw))) {
                 interrupted = true
                 stopSpeaking()
@@ -362,6 +379,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
               onInterruptCheck: async () => interrupted,
               onFirstAudio: () => {
                 tFirstAudio = Date.now()
+              },
+              onSentenceStart: (sentence: string) => {
+                currentSentence = sentence
               },
             })
           } finally {

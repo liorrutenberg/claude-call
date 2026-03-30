@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * call-display — Tiny MCP channel server for pushing call session output
- * to the main interactive Claude Code session.
+ * call-display — MCP channel server for call session monitor events.
  *
- * The call session's background agents POST formatted text to the HTTP
- * endpoint. This server forwards it as an MCP channel notification,
- * which appears in the main session as <channel source="call-display">.
+ * Background agents POST monitor events (dispatch/complete) to the HTTP
+ * endpoint. This server forwards them as MCP channel notifications,
+ * which appear in the main session as <channel source="call-display">.
  *
  * No tools exposed. Channel capability only.
  */
