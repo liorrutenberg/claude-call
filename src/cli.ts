@@ -339,10 +339,8 @@ async function callStart(): Promise<void> {
   const projectRoot = findProjectRoot() ?? process.cwd()
   const sessionId = randomUUID()
 
-  // 2. Get run dir — clean stale artifacts from crashed sessions, then ensure it exists
+  // 2. Get run dir
   const runDir = getRunDir(projectRoot)
-  cleanupRunDir(runDir) // No-op if lock held by live process
-  ensureRunDir(runDir)
 
   // 3. Acquire global voice lock (only one voice session allowed — mic is shared)
   const voiceLock: VoiceLock = {
@@ -360,6 +358,10 @@ async function callStart(): Promise<void> {
     writeln('Stop it first: claude-call call stop')
     process.exit(1)
   }
+
+  // 4. Clean stale artifacts AFTER confirming no live session holds the dir
+  cleanupRunDir(runDir)
+  ensureRunDir(runDir)
 
   if (!acquireVoiceLock(voiceLock)) {
     writeln('Failed to acquire voice lock')

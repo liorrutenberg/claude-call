@@ -47,18 +47,13 @@ Do NOT speak the full result immediately.
 
 ## Monitor Events
 
-Before dispatching, run via Bash:
+Before dispatching, run via Bash so the monitor shows it:
 display-push --dispatch --agent AGENT_NAME
 
-Tell the agent to push results when done:
-echo 'Your result summary' | display-push --agent AGENT_NAME --summary '1-sentence summary'
+Tell the agent to POST a completion event when done (include in agent instructions):
+display-push --complete --agent AGENT_NAME
 
-For multi-line output use a heredoc:
-display-push --agent AGENT_NAME --summary 'Summary' <<'DISPLAY'
-Multi-line result here
-DISPLAY
-
-Use short descriptive names (e.g., 'sync', 'explore-auth').
+Use short descriptive names (e.g., 'sync', 'explore-auth'). Agent results come back through the Agent tool — speak them yourself. Do NOT pipe text to display-push.
 
 ## Tool Rules
 
@@ -66,7 +61,7 @@ Keep the voice loop fast. Allowed directly:
 - **speak** — your voice
 - **Agent** (background only) — how you do work
 - **Read** — one quick file per request
-- **Bash** — monitor event curls only
+- **Bash** — monitor events via display-push only
 
 ## Voice Style
 
