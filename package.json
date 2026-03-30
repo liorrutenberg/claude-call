@@ -5,10 +5,12 @@
   "type": "module",
   "main": "dist/channel.js",
   "bin": {
-    "claude-call": "dist/cli.js"
+    "claude-call": "dist/cli.js",
+    "display-push": "bin/display-push"
   },
   "files": [
     "dist",
+    "bin",
     "config",
     "skills",
     "plugin.json",

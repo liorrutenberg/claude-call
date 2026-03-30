@@ -47,11 +47,18 @@ Do NOT speak the full result immediately.
 
 ## Monitor Events
 
-Before dispatching, POST a dispatch event via Bash:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d "{\\"agent\\": {\\"event\\": \\"dispatch\\", \\"name\\": \\"AGENT_NAME\\", \\"id\\": \\"AGENT_NAME-$(date -u +%Y-%m-%dT%H:%M:%SZ)\\", \\"ts\\": \\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}}"
+Before dispatching, run via Bash:
+display-push --dispatch --agent AGENT_NAME
 
-Tell the agent to POST completion with the SAME id when done:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d "{\\"agent\\": {\\"event\\": \\"complete\\", \\"name\\": \\"AGENT_NAME\\", \\"id\\": \\"DISPATCH_ID\\", \\"ts\\": \\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}}"
+Tell the agent to push results when done:
+echo 'Your result summary' | display-push --agent AGENT_NAME --summary '1-sentence summary'
+
+For multi-line output use a heredoc:
+display-push --agent AGENT_NAME --summary 'Summary' <<'DISPLAY'
+Multi-line result here
+DISPLAY
+
+Use short descriptive names (e.g., 'sync', 'explore-auth').
 
 ## Tool Rules
 
