@@ -33,7 +33,8 @@ function readAgents(runDir: string): AgentEntry[] {
 
   const now = Date.now()
   const dispatches = new Map<string, AgentEvent>()
-  const completes = new Map<string, AgentEvent>()
+  const completesById = new Map<string, AgentEvent>()
+  const completesByName = new Map<string, AgentEvent>()
 
   try {
     const content = readFileSync(agentsPath, 'utf-8')
@@ -41,12 +42,15 @@ function readAgents(runDir: string): AgentEntry[] {
       if (!line.trim()) continue
       try {
         const event = JSON.parse(line) as AgentEvent
-        const key = `${event.name}:${event.ts}`
         if (event.event === 'dispatch') {
+          const key = event.id ?? `${event.name}:${event.ts}`
           dispatches.set(key, event)
         } else if (event.event === 'complete') {
-          // Match complete to dispatch by name (most recent dispatch)
-          completes.set(event.name, event)
+          // Index by id (preferred) and by name (fallback)
+          if (event.id) {
+            completesById.set(event.id, event)
+          }
+          completesByName.set(event.name, event)
         }
       } catch {
         // Skip malformed lines
@@ -66,9 +70,12 @@ function readAgents(runDir: string): AgentEntry[] {
   )
 
   for (const dispatch of sortedDispatches) {
-    const complete = completes.get(dispatch.name)
     const startedAt = new Date(dispatch.ts)
-    const completeKey = complete ? `${complete.name}:${complete.ts}` : null
+    const dispatchId = dispatch.id ?? `${dispatch.name}:${dispatch.ts}`
+
+    // Match by id first, fall back to name
+    const complete = (dispatch.id && completesById.get(dispatch.id)) || completesByName.get(dispatch.name)
+    const completeKey = complete ? (complete.id ?? `${complete.name}:${complete.ts}`) : null
 
     // Check if this dispatch has a matching complete that hasn't been used
     const hasComplete = complete &&

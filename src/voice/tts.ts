@@ -209,6 +209,8 @@ export interface SpeakOptions {
   onInterruptCheck?: () => Promise<boolean>
   /** Called when first audio starts playing (for latency measurement). */
   onFirstAudio?: () => void
+  /** Called when a new sentence begins playing (for echo suppression). */
+  onSentenceStart?: (sentence: string) => void
 }
 
 /**
@@ -234,6 +236,7 @@ export async function speak(text: string, opts?: SpeakOptions): Promise<void> {
 
   try {
     if (sentences.length <= 1) {
+      opts?.onSentenceStart?.(text)
       const file = await synthesizeToFile(text)
       fireFirstAudio()
       if (file) {
@@ -264,6 +267,7 @@ export async function speak(text: string, opts?: SpeakOptions): Promise<void> {
         break
       }
 
+      opts?.onSentenceStart?.(sentences[i])
       fireFirstAudio()
       if (file) {
         await playAudio(file)

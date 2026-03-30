@@ -29,9 +29,9 @@ import {
   ensureRunDir,
   type StatusFile,
   type VoiceLock,
-  setPauseSignalIn,
-  clearPauseSignalIn,
-  hasPauseSignalIn,
+  setMuteSignalIn,
+  clearMuteSignalIn,
+  hasMuteSignalIn,
   acquireVoiceLock,
   releaseVoiceLock,
   updateVoiceLockPid,
@@ -44,86 +44,7 @@ const VERSION = '0.1.0'
 
 // ─── Call Session Prompt ─────────────────────────────────────
 
-function buildCallSessionPrompt(projectRoot: string): string {
-  return `# Call Session
-
-You are **exo**, in voice call mode. User sees their terminal (the "shared screen") while talking.
-
-**Project root:** ${projectRoot}
-
-## Your Output Channels (CRITICAL)
-
-You are running headless. Your text responses go to a log file — THE USER CANNOT SEE THEM.
-
-You have exactly TWO ways to reach the user:
-1. speak() — the user hears it
-2. Display push — agents curl localhost:9847/display
-
-If you don't speak() it or push it to the display, it didn't happen. Never output text expecting the user to read it.
-
-## CRITICAL: Ack → Agent → Speak Pattern
-
-You MUST follow this pattern for ANY request requiring real work:
-1. **Ack by echoing intent** (1 sentence): Say WHAT you're about to do, not just "got it"
-2. **Dispatch Agent** with \`run_in_background: true\` — do the work in background
-3. **When agent returns**, speak the result in 2-3 sentences max
-
-Examples:
-- User: "What's in the auth module?" → Speak: "Checking the auth module." → Agent explores → Speak: "Found three files. Main entry is auth.ts with login and token refresh."
-- User: "Run sync and then let's do morning" → Speak: "Running sync, then we'll plan the morning." → Agent runs sync → Speak result
-- User: "How does the cache work?" → Speak: "Looking at the cache code." → Agent reads code → Speak: "It's an LRU cache with a five minute TTL. I put the details on screen."
-- User: "Track that I need to call the dentist" → Speak: "Tracking the dentist call." → Agent creates trace → Speak: "Done, added it."
-
-Always echo back the specific action so the user knows you understood correctly. NEVER use generic acks like "got it" or "one sec" alone.
-
-## Tool Usage Rule
-
-Keep the voice loop responsive. Only these tools are allowed directly:
-- **speak** — how you talk to the user
-- **Agent** (with \`run_in_background: true\`) — how you do work
-- **Read** — one quick file read per request (e.g., checking a config value)
-
-Everything else (Write, Edit, Bash, Grep, Glob, WebSearch, etc.) MUST go through a background agent. If a request needs more than a spoken response and a single file read, dispatch an agent.
-
-## Voice Brevity Rule
-
-Spoken responses: keep them concise. If you have detailed output:
-1. Push it to the display (see below)
-2. Speak a summary: "Done, it's on screen" or "Check the terminal"
-
-## Display Push
-
-When dispatching a background agent, include in its instructions:
-"After completing work, push your result to the main session:
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{
-  "text": "YOUR_RESULT",
-  "agent": {"event": "complete", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP", "summary": "1-sentence summary"}
-}'
-Use proper JSON escaping. Replace AGENT_NAME with a short identifier (e.g., 'sync', 'explore-auth'). Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ."
-
-ALWAYS POST a dispatch event before calling the Agent tool (so the monitor shows it running):
-curl -s -X POST http://localhost:9847/display -H 'Content-Type: application/json' -d '{"agent": {"event": "dispatch", "name": "AGENT_NAME", "ts": "ISO_TIMESTAMP"}}'
-Generate the ISO timestamp with date -u +%Y-%m-%dT%H:%M:%SZ. Use a short descriptive name (e.g., 'sync', 'explore-auth').
-
-The main session will receive the output via MCP channel notification and display it immediately.
-
-## Voice Style
-
-Concise, conversational, no markdown. "Got it, running sync" not "I will now execute the sync command."
-
-## Voice Commands
-
-- "exo pause" — say "paused", then sleep
-- "exo start" — resume
-- "exo" during speech — stop talking
-
-## Don'ts
-
-- Never go silent without acking
-- Never use Write, Edit, Bash, Grep, or Glob directly — always delegate to agents
-- Never do multi-step work inline — dispatch an agent
-- Never just say you'll push to display — actually include the curl in agent instructions`
-}
+import { buildCallSessionPrompt } from './prompts/call-session.js'
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -418,9 +339,8 @@ async function callStart(): Promise<void> {
   const projectRoot = findProjectRoot() ?? process.cwd()
   const sessionId = randomUUID()
 
-  // 2. Get run dir and ensure it exists
+  // 2. Get run dir
   const runDir = getRunDir(projectRoot)
-  ensureRunDir(runDir)
 
   // 3. Acquire global voice lock (only one voice session allowed — mic is shared)
   const voiceLock: VoiceLock = {
@@ -438,6 +358,10 @@ async function callStart(): Promise<void> {
     writeln('Stop it first: claude-call call stop')
     process.exit(1)
   }
+
+  // 4. Clean stale artifacts AFTER confirming no live session holds the dir
+  cleanupRunDir(runDir)
+  ensureRunDir(runDir)
 
   if (!acquireVoiceLock(voiceLock)) {
     writeln('Failed to acquire voice lock')
@@ -515,7 +439,7 @@ async function callStart(): Promise<void> {
         content: [
           {
             type: 'text',
-            text: `${buildCallSessionPrompt(projectRoot)}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
+            text: `${buildCallSessionPrompt()}\n\n---\n\nYou are now in voice call mode. Always respond using the speak tool. Say hello to confirm you are ready.`,
           },
         ],
       },
@@ -627,43 +551,43 @@ async function callStop(): Promise<void> {
 }
 
 /**
- * Pause a call session (mic stays alive, stops processing).
+ * Mute a call session (mic stays alive, stops processing).
  */
-async function callPause(): Promise<void> {
+async function callMute(): Promise<void> {
   const runDir = resolveActiveRunDir()
   if (!runDir) {
     writeln('No call session running')
     return
   }
 
-  if (hasPauseSignalIn(runDir)) {
-    writeln('Call session already paused')
+  if (hasMuteSignalIn(runDir)) {
+    writeln('Call session already muted')
     return
   }
 
-  setPauseSignalIn(runDir)
-  updateStatus(runDir, { status: 'paused' })
-  writeln('Call session paused')
+  setMuteSignalIn(runDir)
+  updateStatus(runDir, { status: 'muted' })
+  writeln('Call session muted')
 }
 
 /**
- * Resume a paused call session.
+ * Unmute a call session.
  */
-async function callResume(): Promise<void> {
+async function callUnmute(): Promise<void> {
   const runDir = resolveActiveRunDir()
   if (!runDir) {
     writeln('No call session running')
     return
   }
 
-  if (!hasPauseSignalIn(runDir)) {
-    writeln('Call session is not paused')
+  if (!hasMuteSignalIn(runDir)) {
+    writeln('Call session is not muted')
     return
   }
 
-  clearPauseSignalIn(runDir)
+  clearMuteSignalIn(runDir)
   updateStatus(runDir, { status: 'running' })
-  writeln('Call session resumed')
+  writeln('Call session unmuted')
 }
 
 /**
@@ -731,12 +655,10 @@ async function callStatus(): Promise<void> {
 
   // 4. Determine actual status
   let actualStatus: string
-  if (claudeAlive && writerAlive) {
-    actualStatus = 'running'
-  } else if (!claudeAlive && !writerAlive) {
-    actualStatus = 'crashed'
+  if (!claudeAlive || !writerAlive) {
+    actualStatus = (!claudeAlive && !writerAlive) ? 'crashed' : 'crashed (partial)'
   } else {
-    actualStatus = 'crashed (partial)'
+    actualStatus = status.status
   }
 
   // 5. Print status
@@ -796,6 +718,10 @@ async function install(): Promise<void> {
   // Piper voice model
   await downloadWithProgress(MODELS['piper-voice'])
   await downloadWithProgress(MODELS['piper-voice-config'])
+  writeln()
+
+  // Speaker verification model (optional)
+  await downloadWithProgress(MODELS['speaker-resnet34'])
   writeln()
 
   // Step 2b: Start whisper-server if available
@@ -960,7 +886,7 @@ function writeConfigFile(configPath: string, whisperSize: string, pronunciationF
       mode: 'quick' as const,
     },
     interrupt: {
-      keywords: ['stop', 'step', 'wait', 'hold on', 'pause', 'hey'],
+      keywords: ['stop', 'hold on', 'pause', 'exo'],
     },
   }
 
@@ -1005,7 +931,7 @@ async function uninstall(): Promise<void> {
 
   // Skill files
   if (existsSync(commandsDir)) {
-    const knownSkills = ['call-start.md', 'call-stop.md', 'call-pause.md', 'call-resume.md', 'call-status.md', 'call-prefix-on.md', 'call-prefix-off.md']
+    const knownSkills = ['call-start.md', 'call-stop.md', 'call-mute.md', 'call-unmute.md', 'call-status.md', 'call-prefix-on.md', 'call-prefix-off.md']
     const skills = readdirSync(commandsDir).filter(f => knownSkills.includes(f))
     for (const s of skills) {
       items.push({ path: join(commandsDir, s), desc: `Skill: ${s}`, exists: true })
@@ -1167,6 +1093,102 @@ async function monitor(): Promise<void> {
   await import(tuiPath)
 }
 
+// ─── Enroll command ────────────────────────────────────────
+
+async function enroll(): Promise<void> {
+  const { enrollSpeaker } = await import('./voice/speaker.js')
+
+  // Check sherpa availability BEFORE recording samples
+  try {
+    const sherpa = await import(/* webpackIgnore: true */ 'sherpa-onnx-node' as string)
+    if (!sherpa) throw new Error()
+  } catch {
+    writeln('sherpa-onnx-node is not installed. Run: npm install sherpa-onnx-node')
+    process.exit(1)
+  }
+
+  const { existsSync: fileExists } = await import('node:fs')
+  const config = (await import('./config.js')).loadConfig()
+  if (!fileExists(config.speaker.modelPath)) {
+    writeln(`Speaker model not found at ${config.speaker.modelPath}`)
+    writeln('Run: claude-call install   (downloads the WeSpeaker model)')
+    process.exit(1)
+  }
+
+  writeln('Voice enrollment — record 3 samples of 5-10 seconds each.')
+  writeln('Speak naturally. Vary your tone slightly between samples.\n')
+
+  const { initVAD } = await import('./voice/vad.js')
+  const { recordUtterance } = await import('./voice/recorder.js')
+  const { unlinkSync } = await import('node:fs')
+
+  await initVAD()
+
+  const wavPaths: string[] = []
+
+  for (let i = 1; i <= 3; i++) {
+    writeln(`Sample ${i}/3: Speak now...`)
+    const wavPath = await recordUtterance({ silenceMode: 'thoughtful' })
+    if (!wavPath) {
+      writeln('  No speech detected. Try again.')
+      i--
+      continue
+    }
+    wavPaths.push(wavPath)
+    writeln('  Got it.')
+  }
+
+  writeln('\nProcessing embeddings...')
+  const result = await enrollSpeaker(wavPaths)
+
+  // Clean up sample WAV files
+  for (const p of wavPaths) {
+    try { unlinkSync(p) } catch { /* ignore */ }
+  }
+
+  if (result.success) {
+    writeln('Voice profile saved.')
+    writeln('To activate, add to ~/.claude-call/config.yaml:')
+    writeln('  speaker:')
+    writeln('    enabled: true')
+  } else {
+    writeln(`Enrollment failed: ${result.error}`)
+  }
+}
+
+// ─── Calibrate command ─────────────────────────────────────
+
+async function calibrate(): Promise<void> {
+  writeln('Volume calibration — speak normally for 5 seconds.')
+  writeln('This sets the minimum volume threshold for voice filtering.\n')
+
+  const { initVAD } = await import('./voice/vad.js')
+  const { recordUtterance } = await import('./voice/recorder.js')
+  const { computeRmsFromWav } = await import('./voice/volume.js')
+  const { unlinkSync } = await import('node:fs')
+
+  await initVAD()
+
+  writeln('Speak now...')
+  const wavPath = await recordUtterance({ silenceMode: 'thoughtful' })
+  if (!wavPath) {
+    writeln('No speech detected. Try again.')
+    return
+  }
+
+  const rms = computeRmsFromWav(wavPath)
+  try { unlinkSync(wavPath) } catch { /* ignore */ }
+
+  const threshold = rms * 0.6  // 60% of average speaking volume
+
+  writeln(`\nYour average RMS: ${rms.toFixed(4)}`)
+  writeln(`Recommended threshold: ${threshold.toFixed(4)}`)
+  writeln('\nAdd to ~/.claude-call/config.yaml:')
+  writeln('  volumeGate:')
+  writeln('    enabled: true')
+  writeln(`    minRms: ${threshold.toFixed(4)}`)
+}
+
 // ─── Main ───────────────────────────────────────────────────
 
 const command = process.argv[2]
@@ -1215,6 +1237,20 @@ switch (command) {
     })
     break
 
+  case 'enroll':
+    enroll().catch((err) => {
+      writeln(`\nEnroll failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
+  case 'calibrate':
+    calibrate().catch((err) => {
+      writeln(`\nCalibrate failed: ${(err as Error).message}`)
+      process.exit(1)
+    })
+    break
+
   case 'call':
     switch (subcommand) {
       case 'start':
@@ -1235,15 +1271,15 @@ switch (command) {
           process.exit(1)
         })
         break
-      case 'pause':
-        callPause().catch((err) => {
-          writeln(`\nCall pause failed: ${(err as Error).message}`)
+      case 'mute':
+        callMute().catch((err) => {
+          writeln(`\nCall mute failed: ${(err as Error).message}`)
           process.exit(1)
         })
         break
-      case 'resume':
-        callResume().catch((err) => {
-          writeln(`\nCall resume failed: ${(err as Error).message}`)
+      case 'unmute':
+        callUnmute().catch((err) => {
+          writeln(`\nCall unmute failed: ${(err as Error).message}`)
           process.exit(1)
         })
         break
@@ -1266,8 +1302,8 @@ switch (command) {
         writeln('Subcommands:')
         writeln('  start       Start a voice call session')
         writeln('  stop        Stop the current call session')
-        writeln('  pause       Pause the call session')
-        writeln('  resume      Resume a paused call session')
+        writeln('  mute        Mute the call session')
+        writeln('  unmute      Unmute the call session')
         writeln('  prefix-on   Enable "exo" wake word prefix')
         writeln('  prefix-off  Disable wake word prefix')
         writeln('  status      Show call session status')
@@ -1288,10 +1324,12 @@ switch (command) {
     writeln('  check           Verify dependencies and models')
     writeln('  monitor         Interactive status panel (TUI)')
     writeln('  serve           Start MCP channel server (used by Claude Code)')
+    writeln('  enroll          Record voice samples for speaker verification')
+    writeln('  calibrate       Set volume threshold for voice filtering')
     writeln('  call start      Start a voice call session')
     writeln('  call stop       Stop the current call session')
-    writeln('  call pause      Pause the call session')
-    writeln('  call resume     Resume a paused call session')
+    writeln('  call mute       Mute the call session')
+    writeln('  call unmute     Unmute the call session')
     writeln('  call status     Show call session status')
     writeln()
     writeln('Quick start:')

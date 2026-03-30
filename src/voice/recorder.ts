@@ -8,7 +8,7 @@
  *   - Native sample rate detection + resampling to 16 kHz
  *   - Streaming preview: rolling-window WAV every N ms for partial transcription
  *   - Keyword interrupt monitor: persistent background mic during TTS
- *   - Stop/pause signal files for coordination with TTS echo suppression
+ *   - Stop/mute signal files for coordination with TTS echo suppression
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
@@ -24,7 +24,7 @@ import type { SilenceMode } from '../config.js'
 import {
   hasStopSignal as runtimeHasStopSignal,
   clearStopSignal as runtimeClearStopSignal,
-  hasPauseSignal,
+  hasMuteSignal,
   setStopSignal,
 } from '../runtime.js'
 
@@ -33,6 +33,7 @@ const BYTES_PER_SAMPLE = 2
 
 /** Seconds with no speech before giving up on hearing anything. */
 const PRE_SPEECH_TIMEOUT_S = 15
+
 
 // ─── Audio utilities ────────────────────────────────────────
 
@@ -143,9 +144,9 @@ export function killOwnedChildren(): void {
   childPids.clear()
 }
 
-// ─── Stop / pause signals ───────────────────────────────────
+// ─── Stop / mute signals ────────────────────────────────────
 // Now delegated to src/runtime.ts for per-run isolation.
-// Uses CLAUDE_CALL_RUN_DIR env var when set, falls back to global /tmp/ paths.
+// Uses CLAUDE_CALL_RUN_DIR env var when set.
 
 function hasStopSignal(): boolean {
   return runtimeHasStopSignal()
@@ -155,8 +156,8 @@ function clearStopSignal(): void {
   runtimeClearStopSignal()
 }
 
-export function isPaused(): boolean {
-  return hasPauseSignal()
+export function isMuted(): boolean {
+  return hasMuteSignal()
 }
 
 /** Trigger stop signal to kill in-flight recording (e.g., when TTS starts). */
@@ -312,7 +313,7 @@ function extractWindow(pcmChunks: Uint8Array[], totalPcmBytes: number, windowS: 
  * Record a single utterance from the microphone.
  *
  * Spawns `sox rec`, feeds chunks through Silero VAD, and returns
- * a WAV file path when speech ends (or null on timeout / no speech / pause).
+ * a WAV file path when speech ends (or null on timeout / no speech / mute).
  */
 export async function recordUtterance(
   options: RecordOptions = {},
@@ -320,7 +321,7 @@ export async function recordUtterance(
   const silenceMode = options.silenceMode ?? 'standard'
   const effectiveTimeout = options.timeoutMs ?? 120_000
 
-  if (isPaused()) return null
+  if (isMuted()) return null
 
   const silenceChunksNeeded = silenceChunksForMode(silenceMode)
   const preSpeechChunks = Math.ceil(PRE_SPEECH_TIMEOUT_S * (SAMPLE_RATE / VAD_CHUNK_SAMPLES))
@@ -344,6 +345,7 @@ export async function recordUtterance(
     let totalChunks = 0
     let hasSpeechDetected = false
     let speechStartFired = false
+    let speechEndFired = false
     const pcmChunks: Uint8Array[] = []
     let totalPcmBytes = 0
     let resolved = false
@@ -476,12 +478,21 @@ export async function recordUtterance(
 
             if (hasStopSignal()) {
               clearStopSignal()
+              // Fire onSpeechEnd if speech was detected — stop signal
+              // kills recording before natural silence detection can fire it.
+              if (hasSpeechDetected && !speechEndFired && onSpeechEnd) {
+                speechEndFired = true
+                onSpeechEnd()
+              }
               finish()
               return
             }
 
             if (hasSpeechDetected && consecutiveSilent >= silenceChunksNeeded) {
-              onSpeechEnd?.()
+              if (!speechEndFired && onSpeechEnd) {
+                speechEndFired = true
+                onSpeechEnd()
+              }
               finish()
               return
             }

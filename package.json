@@ -5,10 +5,12 @@
   "type": "module",
   "main": "dist/channel.js",
   "bin": {
-    "claude-call": "dist/cli.js"
+    "claude-call": "dist/cli.js",
+    "display-push": "bin/display-push"
   },
   "files": [
     "dist",
+    "bin",
     "config",
     "skills",
     "plugin.json",
@@ -54,5 +56,8 @@
     "@types/node": "^22.15.3",
     "@types/react": "^18.3.18",
     "typescript": "^5.8.3"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-node": "^1.12.0"
   }
 }

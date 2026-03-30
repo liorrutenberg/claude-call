@@ -7,7 +7,7 @@
  *   - Whisper STT (server + CLI) for transcription
  *   - TTS cascade (Piper → edge-tts → say) with sentence pipelining
  *   - Echo suppression: mutes recording during TTS playback
- *   - Keyword interrupt: detects "stop"/"wait" mid-speech to kill playback
+ *   - Keyword interrupt: detects "stop"/"mute" mid-speech to kill playback
  *   - Streaming partial transcription via rolling-window previews
  *
  * Launch: claude --mcp-config ~/.claude-call/mcp.json
@@ -30,22 +30,24 @@ import { transcribe, transcribeFast, getModelPath } from './voice/stt.js'
 import { speak as ttsSpeak, stopSpeaking } from './voice/tts.js'
 import {
   recordUtterance,
-  isPaused,
+  isMuted,
   triggerStop,
   startKeywordMonitor,
   killOwnedChildren,
 } from './voice/recorder.js'
 import {
   playStartChime,
-  playPauseChime,
+  playMuteChime,
   playSpeechStartBeep,
   playSpeechEndBeep,
+  playInterruptChime,
   startThinkingPulse,
   stopThinkingPulse,
+  stopAllFeedback,
 } from './voice/feedback.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
-import { getRunDirFromEnv, getFifoPath, updateStatus } from './runtime.js'
+import { getRunDirFromEnv, getFifoPath, updateStatus, setMuteSignalIn, clearMuteSignalIn } from './runtime.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -53,6 +55,8 @@ const JUNK_TRANSCRIPTS = new Set([
   '', 'you', 'thank you', 'thanks', 'thanks for watching',
   'thank you for watching', 'sorry, i hid', 'sorry i hid',
   'sorry, i hit', 'sorry i hit',
+  // Filler sounds (not commands or meaningful speech)
+  'hmm', 'huh', 'uh', 'um', 'ah',
 ])
 
 // ─── Logging ────────────────────────────────────────────────
@@ -83,26 +87,35 @@ function normalizeText(text: string): string {
 function isMeaningful(text: string): boolean {
   const t = normalizeText(text).toLowerCase().replace(/[.,!?;:]+$/g, '')
   if (!t || t.length < 2) return false
-  return !JUNK_TRANSCRIPTS.has(t)
+  if (JUNK_TRANSCRIPTS.has(t)) return false
+
+  // Check for repetitive words (Whisper hallucination pattern)
+  const words = t.split(/\s+/)
+  if (words.length >= 3) {
+    const firstWord = words[0]
+    if (words.every(w => w === firstWord)) return false
+  }
+
+  return true
 }
 
-// ─── Soft pause ─────────────────────────────────────────────
+// ─── Soft mute ──────────────────────────────────────────────
 
-const PAUSE_PHRASES = ['exo pause', 'echo pause', 'exo paws', 'echo paws', 'exel pause', 'exo pulse', 'exopause', 'echopause', 'extra pause']
-const UNPAUSE_PHRASES = ['exo start', 'echo start', 'exo resume', 'echo resume', 'exo unpause', 'echo unpause', 'exhale start', 'exhaust start', 'exo go', 'echo go', 'exostart', 'echostart']
+const MUTE_PHRASES = ['exo mute', 'echo mute', 'exo mewt', 'echo mewt']
+const UNMUTE_PHRASES = ['exo unmute', 'echo unmute', 'exo start', 'echo start', 'exo on mute', 'echo on mute']
 
 function normalizeForMatch(text: string): string {
   return text.toLowerCase().replace(/[-,.:;!?]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function matchesPause(text: string): boolean {
+function matchesMute(text: string): boolean {
   const t = normalizeForMatch(text)
-  return PAUSE_PHRASES.some(p => t.includes(p))
+  return MUTE_PHRASES.some(p => t.includes(p))
 }
 
-function matchesUnpause(text: string): boolean {
+function matchesUnmute(text: string): boolean {
   const t = normalizeForMatch(text)
-  return UNPAUSE_PHRASES.some(p => t.includes(p))
+  return UNMUTE_PHRASES.some(p => t.includes(p))
 }
 
 // ─── Wake word filter (dual mode) ────────────────────────────
@@ -128,11 +141,11 @@ function extractAfterWakeWord(text: string): string | null {
 }
 
 /**
- * Block the voice loop while soft-paused, keeping mic alive via keyword monitor.
- * Resolves when "exo start" / "exo resume" is detected.
+ * Block the voice loop while user-muted, keeping mic alive via keyword monitor.
+ * Resolves when "exo unmute" / "exo start" is detected.
  */
-async function waitForUnpause(): Promise<void> {
-  log('soft paused — listening for unpause keyword...')
+async function waitForUnmute(): Promise<void> {
+  log('user muted — listening for unmute keyword...')
 
   const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
 
@@ -140,23 +153,25 @@ async function waitForUnpause(): Promise<void> {
     kwMonitor.onBurst = async (wavPath: string) => {
       try {
         const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
-        log(`unpause check: "${raw}"`)
-        if (matchesUnpause(raw)) {
-          softPaused = false
-          log('unpaused by voice command')
-          const resumeRunDir = getRunDirFromEnv()
-          if (resumeRunDir) updateStatus(resumeRunDir, { status: 'running' })
+        log(`unmute check: "${raw}"`)
+        if (matchesUnmute(raw)) {
+          log('unmuted by voice command')
+          const runDir = getRunDirFromEnv()
+          if (runDir) {
+            clearMuteSignalIn(runDir)
+            updateStatus(runDir, { status: 'running' })
+          }
           kwMonitor.stop()
           resolve()
         }
       } catch (err) {
-        log(`unpause transcription error: ${(err as Error).message}`)
+        log(`unmute transcription error: ${(err as Error).message}`)
       }
     }
 
-    // Also exit if hard-paused or externally unpaused
+    // Also exit if externally unmuted (CLI or TUI cleared the signal file)
     const check = setInterval(() => {
-      if (!softPaused || isPaused()) {
+      if (!isMuted()) {
         clearInterval(check)
         kwMonitor.stop()
         resolve()
@@ -167,10 +182,17 @@ async function waitForUnpause(): Promise<void> {
 
 // ─── State ──────────────────────────────────────────────────
 
-let muted = false
-let softPaused = false
+let ttsMuted = false
 let voiceLoopRunning = false
 let sessionDead = false
+
+// Speech queue — serializes concurrent speak calls, prevents overlapping audio
+let speakQueue: Promise<void> = Promise.resolve()
+let speakGeneration = 0  // Cancel token for queue flushing
+
+function flushSpeakQueue(): void {
+  speakGeneration++
+}
 
 // ─── FIFO state (call mode) ─────────────────────────────────
 
@@ -285,58 +307,106 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
   if (req.params.name === 'speak') {
     const text = (args.text as string) ?? ''
-    if (text) {
-      const speakStart = Date.now()
-      stopThinkingPulse() // Stop thinking pulse when response begins
-      log(`speaking: ${text}`)
+    if (!text) return { content: [{ type: 'text', text: 'spoken' }] }
 
-      const config = loadConfig()
-      const interruptKeywords = config.interrupt.keywords
-      let interrupted = false
-      let tFirstAudio = 0
-      const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
-
-      kwMonitor.onBurst = async (wavPath: string) => {
+    const gen = speakGeneration
+    const result = await new Promise<string>((resolve) => {
+      const task = async () => {
         try {
-          const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
-          log(`keyword check: "${raw}"`)
-          if (interruptKeywords.some(kw => raw.includes(kw))) {
-            interrupted = true
-            stopSpeaking()
-            log(`keyword interrupt: "${raw}"`)
+          // Check if cancelled (queue was flushed since we enqueued)
+          if (gen !== speakGeneration) {
+            resolve('cancelled')
+            return
           }
-        } catch (err) {
-          log(`keyword transcription error: ${(err as Error).message}`)
-        }
-      }
+          // Check if muted (signal file — unified source of truth)
+          if (isMuted()) {
+            resolve('muted')
+            return
+          }
 
-      try {
-        await ttsSpeak(text, {
-          onMute: () => {
-            muted = true
-            triggerStop()
-            log('muted (speaking)')
-          },
-          onUnmute: () => {
-            muted = false
-            log('unmuted (done speaking)')
-          },
-          onInterruptCheck: async () => interrupted,
-          onFirstAudio: () => {
-            tFirstAudio = Date.now()
-          },
-        })
-      } finally {
-        kwMonitor.stop()
-        const speakFinish = Date.now()
-        if (tFirstAudio) {
-          log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
-        } else {
-          log(`speak: tts_total=${speakFinish - speakStart}ms`)
+          const speakStart = Date.now()
+          stopThinkingPulse() // Stop thinking pulse when response begins
+          log(`speaking: ${text}`)
+
+          const config = loadConfig()
+          const interruptKeywords = config.interrupt.keywords
+          let interrupted = false
+          let tFirstAudio = 0
+          let currentSentence = '' // Track what TTS is currently speaking (for echo suppression)
+          const kwMonitor = await startKeywordMonitor(3, 1.5, 500)
+
+          kwMonitor.onBurst = async (wavPath: string) => {
+            try {
+              const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
+              log(`keyword check: "${raw}"`)
+
+              // Echo suppression: compare burst against the sentence currently being spoken.
+              // If most words match, it's the mic picking up TTS output — suppress.
+              // Exception: any interrupt keyword always passes through (user may say "stop"
+              // even when Claude just said a word containing "stop").
+              if (currentSentence) {
+                const burstWords = raw.split(/\s+/).filter(w => w.length > 1)
+                const sentenceWords = new Set(currentSentence.toLowerCase().split(/\s+/))
+                const overlap = burstWords.filter(w => sentenceWords.has(w)).length
+                const overlapRatio = burstWords.length > 0 ? overlap / burstWords.length : 0
+                const hasKeyword = interruptKeywords.some(kw => raw.includes(kw))
+                if (overlapRatio > 0.5 && !hasKeyword) {
+                  log(`echo suppressed (${(overlapRatio * 100).toFixed(0)}% overlap): "${raw}"`)
+                  return
+                }
+              }
+
+              if (interruptKeywords.some(kw => raw.includes(kw))) {
+                interrupted = true
+                stopSpeaking()
+                flushSpeakQueue() // Cancel all pending speak items
+                playInterruptChime()
+                log(`keyword interrupt: "${raw}"`)
+              }
+            } catch (err) {
+              log(`keyword transcription error: ${(err as Error).message}`)
+            }
+          }
+
+          try {
+            await ttsSpeak(text, {
+              onMute: () => {
+                ttsMuted = true
+                triggerStop()
+                log('tts muted (speaking)')
+              },
+              onUnmute: () => {
+                ttsMuted = false
+                log('tts unmuted (done speaking)')
+              },
+              onInterruptCheck: async () => interrupted,
+              onFirstAudio: () => {
+                tFirstAudio = Date.now()
+              },
+              onSentenceStart: (sentence: string) => {
+                currentSentence = sentence
+              },
+            })
+          } finally {
+            kwMonitor.stop()
+            const speakFinish = Date.now()
+            if (tFirstAudio) {
+              log(`speak: tts_first=${tFirstAudio - speakStart}ms tts_total=${speakFinish - speakStart}ms`)
+            } else {
+              log(`speak: tts_total=${speakFinish - speakStart}ms`)
+            }
+          }
+
+          resolve('spoken')
+        } catch (err) {
+          log(`speak queue task error: ${(err as Error).message}`)
+          resolve('error')
         }
       }
-    }
-    return { content: [{ type: 'text', text: 'spoken' }] }
+      speakQueue = speakQueue.then(task, task)
+    })
+
+    return { content: [{ type: 'text', text: result }] }
   }
 
   return {
@@ -347,13 +417,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 // ─── Deliver voice to Claude Code session ───────────────────
 
-async function deliver(text: string): Promise<void> {
+async function deliver(text: string): Promise<boolean> {
   log(`delivering: ${text}`)
 
   const runDir = getRunDirFromEnv()
   if (!runDir) {
     log('ERROR: No run dir available (CLAUDE_CALL_RUN_DIR not set)')
-    return
+    return false
   }
 
   const msg = {
@@ -366,8 +436,10 @@ async function deliver(text: string): Promise<void> {
   const json = JSON.stringify(msg) + '\n'
   if (writeFifo(json)) {
     log('delivered via FIFO')
+    return true
   } else {
     log('FIFO delivery failed')
+    return false
   }
 }
 
@@ -378,7 +450,14 @@ async function voiceLoop(): Promise<void> {
     log('voice loop already running — skipping duplicate start')
     return
   }
+
+  if (!getRunDirFromEnv()) {
+    log('no run dir (CLAUDE_CALL_RUN_DIR not set) — voice loop disabled')
+    return
+  }
+
   voiceLoopRunning = true
+  try {
 
   log('loading Silero VAD model...')
   await initVAD()
@@ -406,22 +485,18 @@ async function voiceLoop(): Promise<void> {
     }
 
     try {
-      if (muted) {
+      if (ttsMuted) {
         await new Promise(r => setTimeout(r, 100))
         continue
       }
 
-      if (isPaused()) {
-        await new Promise(r => setTimeout(r, 500))
-        continue
-      }
-
-      if (softPaused) {
-        await waitForUnpause()
-        if (softPaused) continue // hard pause or other exit
+      if (isMuted()) {
+        stopThinkingPulse()
+        await waitForUnmute()
+        if (isMuted()) continue // still muted somehow
         playStartChime()
-        log('voice loop resumed from soft pause')
-        await deliver('[Voice resumed]')
+        log('voice loop resumed from mute')
+        await deliver('[Voice unmuted]')
         continue
       }
 
@@ -432,6 +507,7 @@ async function voiceLoop(): Promise<void> {
         silenceMode: config.silence.mode,
         onSpeechStart: () => {
           log('speech detected — listening...')
+          stopThinkingPulse() // User speaking means Claude responded (or user interrupted) — kill any lingering pulse
           playSpeechStartBeep()
           partialText = ''
           stableText = ''
@@ -474,9 +550,33 @@ async function voiceLoop(): Promise<void> {
 
       if (!wavPath) continue
 
+      // Volume gate — reject quiet audio (background noise picked up by VAD)
+      const volumeConfig = loadConfig().volumeGate
+      if (volumeConfig.enabled && volumeConfig.minRms > 0) {
+        const { computeRmsFromWav } = await import('./voice/volume.js')
+        const rms = computeRmsFromWav(wavPath)
+        if (rms < volumeConfig.minRms) {
+          log(`volume gate rejected: rms=${rms.toFixed(4)} < threshold=${volumeConfig.minRms}`)
+          try { unlinkSync(wavPath) } catch { /* ignore */ }
+          continue
+        }
+      }
+
+      // Speaker verification — reject audio from non-enrolled speaker
+      const { verifySpeaker } = await import('./voice/speaker.js')
+      const sv = await verifySpeaker(wavPath)
+      if (!sv.pass) {
+        log(`speaker rejected: similarity=${sv.similarity?.toFixed(4) ?? 'n/a'} threshold=${config.speaker.threshold}`)
+        try { unlinkSync(wavPath) } catch { /* ignore */ }
+        continue
+      }
+      if (sv.similarity !== undefined) {
+        log(`speaker accepted: similarity=${sv.similarity.toFixed(4)}`)
+      }
+
       log(`recording took ${t1 - t0}ms`)
 
-      if (muted) {
+      if (ttsMuted) {
         try { unlinkSync(wavPath) } catch { /* ignore */ }
         continue
       }
@@ -501,27 +601,30 @@ async function voiceLoop(): Promise<void> {
         continue
       }
 
-      if (muted) {
-        log(`dropped (muted): "${text}"`)
+      if (ttsMuted) {
+        log(`dropped (tts muted): "${text}"`)
         continue
       }
 
-      // Soft pause trigger — "exo pause" keeps mic alive but stops processing
-      // Must check BEFORE wake word stripping so "exo pause" matches
-      if (matchesPause(text)) {
-        softPaused = true
-        playPauseChime()
-        log(`soft pause triggered: "${text}"`)
-        const pauseRunDir = getRunDirFromEnv()
-        if (pauseRunDir) updateStatus(pauseRunDir, { status: 'paused' })
+      // Soft mute trigger — "exo mute" keeps mic alive but stops processing
+      // Must check BEFORE wake word stripping so "exo mute" matches
+      if (matchesMute(text)) {
+        stopThinkingPulse()
+        playMuteChime()
+        log(`mute triggered: "${text}"`)
+        const muteRunDir = getRunDirFromEnv()
+        if (muteRunDir) {
+          setMuteSignalIn(muteRunDir)
+          updateStatus(muteRunDir, { status: 'muted' })
+        }
         try {
-          await deliver('[Voice paused — say "exo start" to resume]')
+          await deliver('[Voice muted — say "exo unmute" to unmute]')
         } catch { /* ignore */ }
         continue
       }
 
       // Wake word filter in dual mode — require "exo" prefix
-      // Applied after pause check so "exo pause" still works
+      // Applied after mute check so "exo mute" still works
       // Check both config AND runtime signal file (prefix file in run dir enables it)
       const runDirForPrefix = getRunDirFromEnv()
       const prefixEnabled = runDirForPrefix
@@ -539,20 +642,22 @@ async function voiceLoop(): Promise<void> {
 
       log(`heard: ${text}`)
 
-      try {
-        await deliver(text)
-        const tDelivered = Date.now()
+      const delivered = await deliver(text)
+      const tDelivered = Date.now()
+      log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
+      if (delivered) {
         log('delivered')
-        log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
-        // Start thinking pulse while waiting for Claude's response
         startThinkingPulse()
-      } catch (err) {
-        log(`deliver error: ${(err as Error).message}`)
+      } else {
+        log('delivery failed — skipping thinking pulse')
       }
     } catch (err) {
       log(`error: ${(err as Error).message}`)
       await new Promise(r => setTimeout(r, 1000))
     }
+  }
+  } finally {
+    voiceLoopRunning = false
   }
 }
 
@@ -563,6 +668,8 @@ let cleanedUp = false
 function cleanupOnExit(): void {
   if (cleanedUp) return
   cleanedUp = true
+  stopSpeaking()
+  stopAllFeedback()
   killOwnedChildren()
   closeFifo()
 }

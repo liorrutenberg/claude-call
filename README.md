@@ -35,8 +35,12 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
-- **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
-- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/resume chime, pause chime — so you always know the system state
+- **Display push** — Call session pushes agent monitor events to the main session via MCP channel notification
+- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/unmute chime, mute chime — so you always know the system state
+
+### Voice Filtering
+- **Volume gate** — RMS amplitude filter rejects background noise (configurable threshold via `claude-call calibrate`)
+- **Speaker verification** — Optional voice ID using WeSpeaker embeddings; only processes the enrolled speaker's voice (`claude-call enroll`)
 
 ### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
@@ -44,7 +48,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Whisper STT** — Local speech-to-text via whisper.cpp (server mode + CLI fallback)
 - **TTS cascade** — Piper (fast, local) → Qwen3 (best quality, opt-in) → edge-tts (Microsoft neural, free) → macOS say (fallback)
 - **Sentence pipelining** — Long responses are split into sentences; next sentence synthesizes while current plays
-- **Keyword interrupt** — Say "stop", "wait", or "hold on" to kill playback mid-sentence
+- **Keyword interrupt** — Say "stop", "hold on", or "exo" to kill playback mid-sentence
 - **Streaming preview** — Rolling-window partial transcription every 600ms during recording
 - **Pronunciation engine** — YAML dictionary for TTS text rewriting and STT vocabulary hints
 - **Configurable** — TTS engine, playback rate, silence sensitivity, interrupt keywords, and more
@@ -94,7 +98,7 @@ Add `~/.claude-call/bin` to your PATH, then:
 ```bash
 eld       # Claude + voice (like cld)
 eldc      # Claude + voice, continue last conversation
-eldr      # Claude + voice, resume last conversation
+eldr      # Claude + voice, continue last conversation (resume)
 ```
 
 Voice starts automatically and stops when you exit Claude. No manual cleanup needed.
@@ -132,10 +136,10 @@ Once a voice session is active, you can control it hands-free:
 | Command | What it does |
 |---|---|
 | **"exo"** | Say the wake word while Claude is speaking to **interrupt** playback mid-sentence |
-| **"exo pause"** | **Pause** voice input — the mic stays alive but stops processing speech |
-| **"exo start"** | **Resume** voice input after a pause |
+| **"exo mute"** | **Mute** voice input — mic listens only for unmute, agents keep running |
+| **"exo unmute"** / **"exo start"** | **Unmute** voice input — Claude summarizes what happened while muted |
 
-Whisper sometimes mishears these phrases, so common variants (e.g., "echo pause", "exo resume") are recognized automatically.
+Whisper sometimes mishears these phrases, so common variants (e.g., "echo mute", "echo unmute") are recognized automatically.
 
 > **Configurable:** The interrupt keywords and wake word can be changed in `~/.claude-call/config.yaml` under the `interrupt.keywords` section. See [docs/configuration.md](docs/configuration.md) for details.
 
@@ -160,14 +164,21 @@ silence:
 interrupt:
   keywords:
     - stop
-    - step
-    - wait
     - hold on
     - pause
-    - hey
+    - exo
 
 pronunciation:
   file: ""            # path to custom pronunciation.yaml
+
+volumeGate:
+  enabled: false      # enable RMS volume gate
+  minRms: 0           # minimum RMS amplitude (0-1), use `claude-call calibrate` to set
+
+speaker:
+  enabled: false      # enable speaker verification
+  threshold: 0.55     # cosine similarity threshold (0-1)
+  modelPath: ~/.claude-call/models/wespeaker_en_voxceleb_resnet34_LM.onnx
 ```
 
 ### Environment Variables
@@ -184,6 +195,9 @@ pronunciation:
 | `CLAUDE_CALL_INTERRUPT_KEYWORDS` | Comma-separated interrupt keywords |
 | `CLAUDE_CALL_PRONUNCIATION_FILE` | Custom pronunciation YAML path |
 | `CLAUDE_CALL_DATA_DIR` | Data directory (default: ~/.claude-call) |
+| `CLAUDE_CALL_VOLUME_GATE_MIN_RMS` | Volume gate RMS threshold (0-1, enables gate if > 0) |
+| `CLAUDE_CALL_SPEAKER_ENABLED` | Enable speaker verification |
+| `CLAUDE_CALL_SPEAKER_THRESHOLD` | Speaker verification cosine similarity threshold |
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 
@@ -222,15 +236,15 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 │  ┌───────────────────────────┐  │
 │  │ Speech start/end beeps    │  │
 │  │ Thinking pulse (waiting)  │  │
-│  │ Start / resume chime      │  │
-│  │ Pause chime               │  │
+│  │ Start / unmute chime       │  │
+│  │ Mute chime                │  │
 │  └───────────────────────────┘  │
 └─────────────────────────────────┘
 ```
 
 ### Display Push
 
-The call session speaks concise summaries. When you say "show it" or "put it on screen", the call session's background agents push formatted output directly to the main session via HTTP POST to the display MCP server (`localhost:9847`), which forwards it as an MCP channel notification.
+The call session speaks concise summaries. Background agents post monitor events (dispatch/complete) via HTTP POST to the display MCP server (`localhost:9847`), which forwards them as MCP channel notifications to the main session's TUI monitor.
 
 See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 
@@ -281,10 +295,12 @@ claude-call init        # Per-project setup (.mcp.json)
 claude-call uninstall   # Remove everything (--dry-run to preview)
 claude-call check       # Verify dependencies and models
 claude-call serve       # Start MCP server (used by Claude Code)
+claude-call enroll      # Record voice samples for speaker verification
+claude-call calibrate   # Set volume threshold for voice filtering
 claude-call call start  # Start a voice call session
 claude-call call stop   # Stop the current call session
-claude-call call pause  # Pause the call session
-claude-call call resume # Resume a paused call session
+claude-call call mute   # Mute voice input (agents keep running)
+claude-call call unmute # Unmute voice input
 claude-call call status # Show call session status
 ```
 

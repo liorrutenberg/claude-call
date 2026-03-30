@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# display-push — Push messages and events to the call-display server.
+#
+# Usage:
+#   # Push text to the main screen:
+#   display-push --screen "Build passed, all 47 tests green"
+#
+#   # Agent dispatch (monitor + main screen):
+#   display-push --dispatch --agent sync
+#
+#   # Agent completion (monitor + main screen):
+#   display-push --complete --agent sync
+#
+#   # With explicit correlation ID:
+#   display-push --dispatch --agent sync --id sync-123
+#   display-push --complete --agent sync --id sync-123
+#
+# Requires: jq, curl
+
+set -euo pipefail
+
+PORT="${DISPLAY_PORT:-9847}"
+URL="http://localhost:${PORT}/display"
+
+AGENT_NAME=""
+AGENT_EVENT=""
+AGENT_ID=""
+SCREEN_TEXT=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)    AGENT_NAME="$2"; shift 2 ;;
+    --dispatch) AGENT_EVENT="dispatch"; shift ;;
+    --complete) AGENT_EVENT="complete"; shift ;;
+    --id)       AGENT_ID="$2"; shift 2 ;;
+    --screen)   SCREEN_TEXT="$2"; shift 2 ;;
+    --port)     PORT="$2"; URL="http://localhost:${PORT}/display"; shift 2 ;;
+    *)          echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+# ─── Screen text mode ───────────────────────────────────────
+if [[ -n "$SCREEN_TEXT" ]]; then
+  PAYLOAD=$(jq -nc --arg text "$SCREEN_TEXT" '{ text: $text }')
+  exec curl -s -X POST "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD"
+fi
+
+# ─── Agent event mode ───────────────────────────────────────
+if [[ -z "$AGENT_NAME" ]]; then
+  echo "Error: --agent NAME or --screen TEXT is required" >&2
+  exit 1
+fi
+
+if [[ -z "$AGENT_EVENT" ]]; then
+  echo "Error: --dispatch or --complete is required" >&2
+  exit 1
+fi
+
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Generate stable ID if not provided: NAME-TIMESTAMP
+if [[ -z "$AGENT_ID" ]]; then
+  AGENT_ID="${AGENT_NAME}-${TS}"
+fi
+
+PAYLOAD=$(jq -nc \
+  --arg event "$AGENT_EVENT" \
+  --arg name "$AGENT_NAME" \
+  --arg id "$AGENT_ID" \
+  --arg ts "$TS" \
+  '{ agent: { event: $event, name: $name, id: $id, ts: $ts } }')
+
+exec curl -s -X POST "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD"

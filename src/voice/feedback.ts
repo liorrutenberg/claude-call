@@ -5,12 +5,12 @@
  * Separate from TTS playback (has its own process tracking).
  *
  * Three sounds:
- *   - Start/resume chime: short ascending tone when call activates or unpauses
- *   - Pause chime: short descending tone when call pauses
+ *   - Start/unmute chime: short ascending tone when call activates or unmutes
+ *   - Mute chime: short descending tone when call mutes
  *   - Thinking pulse: gentle repeating tick while waiting for Claude's response
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { loadConfig, getLogDir } from '../config.js'
 
@@ -35,9 +35,10 @@ function log(msg: string): void {
 
 // ─── Active process tracking ─────────────────────────────────
 
-let thinkingInterval: NodeJS.Timeout | null = null
+const activePlayProcesses = new Set<ChildProcess>()
 let thinkingTimeout: NodeJS.Timeout | null = null
 let thinkingMaxTimeout: NodeJS.Timeout | null = null // Safety cutoff
+let pulseGeneration = 0 // Monotonic counter — incremented on every start/stop to kill orphaned callbacks
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -51,20 +52,26 @@ function getVolume(): number {
 
 /**
  * Play a tone without waiting (fire and forget).
+ * Tracks spawned processes so they can be killed on cleanup.
  */
 function playToneAsync(args: string[], label: string): void {
   if (!isEnabled()) return
 
   log(`${label}`)
   const proc = spawn('play', args, { stdio: 'ignore' })
-  // Don't track single-shot chimes — they're short enough
-  proc.once('error', (err) => log(`play error (${label}): ${err.message}`))
+  activePlayProcesses.add(proc)
+  const cleanup = () => { activePlayProcesses.delete(proc) }
+  proc.once('close', cleanup)
+  proc.once('error', (err) => {
+    log(`play error (${label}): ${err.message}`)
+    cleanup()
+  })
 }
 
-// ─── Start/Resume Chime ──────────────────────────────────────
+// ─── Start/Unmute Chime ──────────────────────────────────────
 
 /**
- * Play start/resume chime — short ascending tone.
+ * Play start/unmute chime — short ascending tone.
  * Two quick notes: 600Hz then 800Hz.
  */
 export function playStartChime(): void {
@@ -79,13 +86,13 @@ export function playStartChime(): void {
   ], 'start chime')
 }
 
-// ─── Pause Chime ─────────────────────────────────────────────
+// ─── Mute Chime ──────────────────────────────────────────────
 
 /**
- * Play pause chime — short descending tone.
+ * Play mute chime — short descending tone.
  * Two quick notes: 800Hz then 500Hz.
  */
-export function playPauseChime(): void {
+export function playMuteChime(): void {
   const vol = getVolume()
   // Two-tone descending chime (colon chains synth commands)
   playToneAsync([
@@ -94,7 +101,7 @@ export function playPauseChime(): void {
     'synth', '0.12', 'sine', '500',
     'vol', String(vol),
     'fade', 'q', '0.01', '-0', '0.02',
-  ], 'pause chime')
+  ], 'mute chime')
 }
 
 // ─── Speech Detection Beeps ─────────────────────────────────
@@ -127,6 +134,22 @@ export function playSpeechEndBeep(): void {
   ], 'speech end beep')
 }
 
+// ─── Interrupt Chime ─────────────────────────────────────────
+
+/**
+ * Short descending blip — confirms interrupt was acknowledged.
+ */
+export function playInterruptChime(): void {
+  const vol = getVolume() * 0.7
+  playToneAsync([
+    '-n', '-q',
+    'synth', '0.06', 'sine', '700', ':',
+    'synth', '0.06', 'sine', '400',
+    'vol', String(vol),
+    'fade', 'q', '0.01', '-0', '0.01',
+  ], 'interrupt chime')
+}
+
 // ─── Thinking Pulse ──────────────────────────────────────────
 
 /**
@@ -144,37 +167,51 @@ function playThinkingTick(): void {
 
 /**
  * Start the thinking pulse after a 500ms delay.
- * Repeats a gentle tick every 1.5 seconds until stopped.
+ * Uses recursive setTimeout tied to a generation token — each start/stop
+ * increments the generation, instantly orphaning any pending callbacks
+ * from a previous pulse without relying on clearInterval timing.
  * Auto-stops after 60 seconds as a safety cutoff.
  */
 export function startThinkingPulse(): void {
   if (!isEnabled()) return
-  stopThinkingPulse() // Clear any existing
+  stopThinkingPulse() // Clear any existing + bump generation
+
+  const gen = ++pulseGeneration // Capture token for this pulse
+
+  function scheduleNextTick(): void {
+    thinkingTimeout = setTimeout(() => {
+      if (gen !== pulseGeneration) return // Orphaned — silently die
+      playThinkingTick()
+      scheduleNextTick()
+    }, 1500)
+  }
 
   log('thinking pulse started')
+  // Initial delay before first tick
   thinkingTimeout = setTimeout(() => {
-    // Play first tick
+    if (gen !== pulseGeneration) return // Orphaned
     playThinkingTick()
-    // Then repeat every 1.5s
-    thinkingInterval = setInterval(playThinkingTick, 1500)
+    scheduleNextTick()
   }, 500)
 
   // Safety cutoff: stop after 60 seconds if never explicitly stopped
-  thinkingMaxTimeout = setTimeout(stopThinkingPulse, 60_000)
+  thinkingMaxTimeout = setTimeout(() => {
+    if (gen !== pulseGeneration) return // Stale safety timeout — ignore
+    stopThinkingPulse()
+  }, 60_000)
 }
 
 /**
  * Stop the thinking pulse immediately.
+ * Increments pulseGeneration so any pending recursive setTimeout callbacks
+ * will see a stale generation token and silently exit.
  */
 export function stopThinkingPulse(): void {
-  const wasActive = thinkingTimeout !== null || thinkingInterval !== null
+  const wasActive = thinkingTimeout !== null
+  pulseGeneration++ // Kill switch — orphan any pending callbacks
   if (thinkingTimeout) {
     clearTimeout(thinkingTimeout)
     thinkingTimeout = null
-  }
-  if (thinkingInterval) {
-    clearInterval(thinkingInterval)
-    thinkingInterval = null
   }
   if (thinkingMaxTimeout) {
     clearTimeout(thinkingMaxTimeout)
@@ -188,8 +225,21 @@ export function stopThinkingPulse(): void {
 // ─── Cleanup ─────────────────────────────────────────────────
 
 /**
- * Stop all feedback sounds.
+ * Kill all tracked play processes (SIGTERM).
+ * Processes remove themselves from the set via their close handler.
+ */
+export function killAllFeedbackProcesses(): void {
+  for (const proc of activePlayProcesses) {
+    try {
+      if (!proc.killed) proc.kill('SIGTERM')
+    } catch { /* already dead */ }
+  }
+}
+
+/**
+ * Stop all feedback sounds — kills thinking pulse and all tracked play processes.
  */
 export function stopAllFeedback(): void {
   stopThinkingPulse()
+  killAllFeedbackProcesses()
 }

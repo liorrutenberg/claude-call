@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, useInput } from 'ink'
 import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
 import { SessionInfo } from './SessionInfo.js'
 import { readMonitorState } from './state.js'
+import { setMuteSignalIn, clearMuteSignalIn, hasMuteSignalIn, updateStatus } from '../runtime.js'
 import type { MonitorState } from './types.js'
 
 const POLL_INTERVAL_MS = 1500
@@ -34,6 +35,20 @@ export function App() {
     return () => clearInterval(interval)
   }, [])
 
+  useInput((input) => {
+    if (!state.runDir) return
+    if (input === 'm') {
+      if (hasMuteSignalIn(state.runDir)) {
+        clearMuteSignalIn(state.runDir)
+        updateStatus(state.runDir, { status: 'running' })
+      } else {
+        setMuteSignalIn(state.runDir)
+        updateStatus(state.runDir, { status: 'muted' })
+      }
+      setState(readMonitorState())
+    }
+  })
+
   return (
     <Box flexDirection="column" padding={1}>
       <Text bold>claude-call monitor</Text>
@@ -44,6 +59,11 @@ export function App() {
       {!state.connected && (
         <Box marginTop={1}>
           <Text dimColor>Waiting for call session...</Text>
+        </Box>
+      )}
+      {state.connected && (
+        <Box marginTop={1}>
+          <Text dimColor>[m] mute/unmute</Text>
         </Box>
       )}
     </Box>

@@ -54,9 +54,9 @@ Two independent Claude sessions:
 ### 2. Per-run isolation
 
 Each call session gets a runtime directory: `~/.claude-call/runs/<project-hash>/`
-Contains: lock file, status file, FIFO, MCP config, session-scoped pause/stop files.
+Contains: lock file, status file, FIFO, MCP config, session-scoped stop/mute files.
 
-Global `/tmp/claude-call-stop` and `/tmp/claude-call-pause` move here to prevent cross-session collisions.
+Global `/tmp/claude-call-stop` and `/tmp/claude-call-mute` move here to prevent cross-session collisions.
 
 ### 3. Voice MCP only in call session
 
@@ -75,8 +75,8 @@ Main session must start with `--dangerously-load-development-channels server:cal
 ### 5. Audio feedback cues
 
 Three sounds, separate from TTS playback:
-- **Start/resume chime**: When call session activates or unpauses
-- **Pause chime**: When call pauses
+- **Start/unmute chime**: When call session activates or unmutes
+- **Mute chime**: When call mutes
 - **Thinking pulse**: Starts after 500ms of silence from Claude (user spoke, waiting for response). Stops when response begins. Tells user "I'm working on it."
 
 No ambient idle sound. Silence = ready to listen.
@@ -126,13 +126,13 @@ Default `claude` does NOT start call mode. Voice activates only via:
 
 | # | Task | Files | What |
 |---|------|-------|------|
-| 1 | Runtime state & locking | new `src/runtime.ts`, `src/config.ts`, `src/voice/recorder.ts` | Per-run dir, lock file, status file, session-scoped stop/pause files, FIFO paths |
+| 1 | Runtime state & locking | new `src/runtime.ts`, `src/config.ts`, `src/voice/recorder.ts` | Per-run dir, lock file, status file, session-scoped stop/mute files, FIFO paths |
 | 2 | CLI `call start/stop/status` | `src/cli.ts` | Spawn headless session, per-run MCP config, cleanup on stop, health output |
 | 3 | Remove voice from main session | `src/cli.ts`, `plugin.json`, docs | Dual-mode setup: voice MCP only loads in call process |
 | 4 | Direct FIFO delivery | `src/channel.ts`, `src/voice/recorder.ts` | `deliver()` writes stream-json to FIFO in call mode; channel notifications for legacy single-session |
 | 5 | Shared workspace | new `src/workspace.ts`, `src/cli.ts` | `.claude-call/` dir, workspace init |
 | 6 | Call session prompt | new `prompts/call-session.md`, `src/cli.ts` | Voice-first behavior, ack-first-delegate-second, shared-screen model, display push rules |
-| 7 | Audio cue management | new `src/voice/feedback.ts`, `src/voice/tts.ts`, `src/channel.ts`, `src/config.ts` | Separate cue playback from TTS, start/pause/thinking sounds |
+| 7 | Audio cue management | new `src/voice/feedback.ts`, `src/voice/tts.ts`, `src/channel.ts`, `src/config.ts` | Separate cue playback from TTS, start/mute/thinking sounds |
 | 8 | Crash supervision & cleanup | `src/cli.ts`, `src/channel.ts`, `src/voice/recorder.ts` | Heartbeat, broken-pipe handling, targeted process kill (only owned children) |
 | 9 | Latency measurement | `src/channel.ts`, `src/cli.ts` | Timestamp pipeline stages, log end-to-end numbers |
 

@@ -24,7 +24,7 @@ import { loadConfig } from './config.js'
 
 // ─── Types ──────────────────────────────────────────────────
 
-export type CallStatus = 'running' | 'paused' | 'crashed' | 'stopped'
+export type CallStatus = 'running' | 'muted' | 'crashed' | 'stopped'
 
 export interface StatusFile {
   status: CallStatus
@@ -109,14 +109,13 @@ export function getStopPath(runDir: string): string {
   return join(runDir, 'stop')
 }
 
-export function getPausePath(runDir: string): string {
-  return join(runDir, 'pause')
+export function getMutePath(runDir: string): string {
+  return join(runDir, 'mute')
 }
 
 // ─── Legacy global paths (backward compatibility) ───────────
 
 const LEGACY_STOP_FILE = '/tmp/claude-call-stop'
-const LEGACY_PAUSE_FILE = '/tmp/claude-call-pause'
 
 /**
  * Get the stop signal file path.
@@ -128,12 +127,12 @@ export function getStopFilePath(): string {
 }
 
 /**
- * Get the pause signal file path.
- * Uses per-run path if CLAUDE_CALL_RUN_DIR is set, else falls back to global.
+ * Get the mute signal file path.
+ * Uses per-run path if CLAUDE_CALL_RUN_DIR is set.
  */
-export function getPauseFilePath(): string {
+export function getMuteFilePath(): string | null {
   const runDir = getRunDirFromEnv()
-  return runDir ? getPausePath(runDir) : LEGACY_PAUSE_FILE
+  return runDir ? getMutePath(runDir) : null
 }
 
 // ─── Directory management ───────────────────────────────────
@@ -524,22 +523,22 @@ export function hasStopSignalIn(runDir: string): boolean {
 }
 
 /**
- * Set the pause signal for a specific run directory.
+ * Set the mute signal for a specific run directory.
  */
-export function setPauseSignalIn(runDir: string): void {
+export function setMuteSignalIn(runDir: string): void {
   ensureRunDir(runDir)
   try {
-    writeFileSync(getPausePath(runDir), `pause at ${new Date().toISOString()}`)
+    writeFileSync(getMutePath(runDir), `mute at ${new Date().toISOString()}`)
   } catch {
     // Ignore errors
   }
 }
 
 /**
- * Clear the pause signal for a specific run directory.
+ * Clear the mute signal for a specific run directory.
  */
-export function clearPauseSignalIn(runDir: string): void {
-  const path = getPausePath(runDir)
+export function clearMuteSignalIn(runDir: string): void {
+  const path = getMutePath(runDir)
   try {
     if (existsSync(path)) unlinkSync(path)
   } catch {
@@ -548,10 +547,10 @@ export function clearPauseSignalIn(runDir: string): void {
 }
 
 /**
- * Check if pause signal is set for a specific run directory.
+ * Check if mute signal is set for a specific run directory.
  */
-export function hasPauseSignalIn(runDir: string): boolean {
-  return existsSync(getPausePath(runDir))
+export function hasMuteSignalIn(runDir: string): boolean {
+  return existsSync(getMutePath(runDir))
 }
 
 // ─── Signal file helpers (env-driven, for recorder.ts compat) ─
@@ -595,36 +594,32 @@ export function clearStopSignal(): void {
 }
 
 /**
- * Check if pause signal is set.
- * Uses CLAUDE_CALL_RUN_DIR if set, else legacy global path.
+ * Check if mute signal is set.
+ * Uses CLAUDE_CALL_RUN_DIR if set.
  */
-export function hasPauseSignal(): boolean {
-  return existsSync(getPauseFilePath())
+export function hasMuteSignal(): boolean {
+  const path = getMuteFilePath()
+  return path !== null && existsSync(path)
 }
 
 /**
- * Set the pause signal.
- * Uses CLAUDE_CALL_RUN_DIR if set, else legacy global path.
+ * Set the mute signal.
+ * Uses CLAUDE_CALL_RUN_DIR if set.
  */
-export function setPauseSignal(): void {
+export function setMuteSignal(): void {
   const runDir = getRunDirFromEnv()
   if (runDir) {
-    setPauseSignalIn(runDir)
-  } else {
-    try {
-      writeFileSync(LEGACY_PAUSE_FILE, `pause at ${new Date().toISOString()}`)
-    } catch {
-      // Ignore errors
-    }
+    setMuteSignalIn(runDir)
   }
 }
 
 /**
- * Clear the pause signal.
- * Uses CLAUDE_CALL_RUN_DIR if set, else legacy global path.
+ * Clear the mute signal.
+ * Uses CLAUDE_CALL_RUN_DIR if set.
  */
-export function clearPauseSignal(): void {
-  const path = getPauseFilePath()
+export function clearMuteSignal(): void {
+  const path = getMuteFilePath()
+  if (path === null) return
   try {
     if (existsSync(path)) unlinkSync(path)
   } catch {

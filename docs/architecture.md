@@ -21,13 +21,17 @@ In both modes, Claude calls the `speak` tool exposed by the MCP server for TTS o
 The main loop in `channel.ts` runs continuously:
 
 ```
-┌─→ Check muted? ──→ (sleep 100ms, retry) ──→ ↑
-│   Check paused? ──→ (sleep 500ms, retry) ──→ ↑
+┌─→ Check muted? ──→ waitForUnmute() ──→ ↑
 │
 │   Record utterance (sox + VAD)
 │   │  ├─ VAD detects speech start → begin preview timer
 │   │  ├─ Every 600ms → extract rolling window → fast transcribe → log
 │   │  └─ VAD detects silence (1-2.5s) → stop recording
+│   │
+│   ↓
+│   Volume gate (RMS check — reject quiet audio if enabled)
+│   │
+│   Speaker verification (cosine similarity vs enrolled profile if enabled)
 │   │
 │   ↓
 │   Final transcription (Whisper, beam search + domain prompt)
@@ -116,7 +120,7 @@ Sox `rec` is used for mic input. Key details:
 - **Native rate detection**: Probes the default input device's sample rate to avoid resampling artifacts
 - **Resampling**: If native rate differs from 16 kHz, linear interpolation downsamples in-process
 - **WAV creation**: Raw PCM is wrapped in a WAV header (44 bytes) for Whisper compatibility
-- **Signal files**: Per-run `stop` and `pause` files in `~/.claude-call/runs/<project-hash>/` for cross-process coordination
+- **Signal files**: Per-run `stop` and `mute` files in `~/.claude-call/runs/<project-hash>/` for cross-process coordination
 
 ## Data Flow
 
@@ -136,6 +140,12 @@ Silero VAD (512-sample chunks)
     ├─ Speech detected → start preview timer
     │   ├─ Every 600ms → rolling window → transcribeFast → log partial
     │   └─ Silence for 1-2.5s → utterance complete
+    │
+    ↓
+Volume gate (reject if RMS < threshold, opt-in)
+    │
+    ↓
+Speaker verification (reject if not enrolled speaker, opt-in)
     │
     ↓
 Whisper STT (full utterance, beam search)

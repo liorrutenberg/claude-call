@@ -78,15 +78,13 @@ interrupt:
   # Keywords that trigger TTS interruption when spoken during playback
   # The keyword monitor runs a persistent background mic during TTS,
   # detects speech bursts via VAD, and fast-transcribes to check for matches
-  # Default: [stop, step, wait, hold on, pause, hey]
+  # Default: [stop, hold on, pause, exo]
   # Env: CLAUDE_CALL_INTERRUPT_KEYWORDS (comma-separated)
   keywords:
     - stop
-    - step
-    - wait
     - hold on
     - pause
-    - hey
+    - exo
 
 pronunciation:
   # Path to custom pronunciation YAML dictionary
@@ -94,6 +92,36 @@ pronunciation:
   # Default: ""
   # Env: CLAUDE_CALL_PRONUNCIATION_FILE
   file: ""
+
+volumeGate:
+  # Enable volume gate — rejects audio below a minimum RMS amplitude.
+  # Use `claude-call calibrate` to find the right threshold for your mic.
+  # Default: false
+  enabled: false
+
+  # Minimum RMS amplitude (0-1). Audio below this threshold is rejected.
+  # Set to 0 to disable. Use `claude-call calibrate` to determine a good value.
+  # Default: 0
+  # Env: CLAUDE_CALL_VOLUME_GATE_MIN_RMS (setting > 0 also enables the gate)
+  minRms: 0
+
+speaker:
+  # Enable speaker verification — only process audio from the enrolled speaker.
+  # Requires sherpa-onnx-node and a downloaded WeSpeaker model.
+  # Gracefully degrades: if not available, all audio passes through.
+  # Default: false
+  # Env: CLAUDE_CALL_SPEAKER_ENABLED
+  enabled: false
+
+  # Cosine similarity threshold for speaker matching (0-1).
+  # Higher = stricter matching, lower = more permissive.
+  # Default: 0.55
+  # Env: CLAUDE_CALL_SPEAKER_THRESHOLD
+  threshold: 0.55
+
+  # Path to WeSpeaker ONNX model file
+  # Default: ~/.claude-call/models/wespeaker_en_voxceleb_resnet34_LM.onnx
+  modelPath: ~/.claude-call/models/wespeaker_en_voxceleb_resnet34_LM.onnx
 ```
 
 ## Whisper Server Mode

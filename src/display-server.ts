@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * call-display — Tiny MCP channel server for pushing call session output
- * to the main interactive Claude Code session.
+ * call-display — MCP channel server for call session monitor events.
  *
- * The call session's background agents POST formatted text to the HTTP
- * endpoint. This server forwards it as an MCP channel notification,
- * which appears in the main session as <channel source="call-display">.
+ * Background agents POST monitor events (dispatch/complete) to the HTTP
+ * endpoint. This server forwards them as MCP channel notifications,
+ * which appear in the main session as <channel source="call-display">.
  *
  * No tools exposed. Channel capability only.
  */
@@ -30,14 +29,17 @@ const VALID_EVENTS = ['dispatch', 'complete'] as const
 function writeAgentEvent(agent: unknown): void {
   if (!agent || typeof agent !== 'object') return
 
-  const { event, name, ts, summary } = agent as Record<string, unknown>
+  const { event, name, ts, summary, id: rawId } = agent as Record<string, unknown>
   if (typeof event !== 'string' || typeof name !== 'string' || typeof ts !== 'string') return
   if (!VALID_EVENTS.includes(event as typeof VALID_EVENTS[number])) return
 
   const runDir = resolveActiveRunDir()
   if (!runDir) return
 
-  const eventObj: Record<string, string> = { event, name, ts }
+  // Use provided id or auto-generate one for dispatch events
+  const id = typeof rawId === 'string' ? rawId : `${name}-${ts}`
+
+  const eventObj: Record<string, string> = { event, name, ts, id }
   if (typeof summary === 'string') eventObj.summary = summary
 
   try {
@@ -90,7 +92,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // Write agent event if present (best-effort)
       writeAgentEvent(agent)
 
-      // Allow agent-only POSTs (no text field required)
+      // Agent-only POSTs: write to agents.jsonl, no MCP notification
       if (typeof text !== 'string' || !text) {
         if (agent) {
           res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -98,10 +100,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           return
         }
         res.writeHead(400, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'missing text field' }))
+        res.end(JSON.stringify({ error: 'missing text or agent field' }))
         return
       }
 
+      // Text messages: push to main screen via MCP channel
       await mcp.notification({
         method: 'notifications/claude/channel',
         params: { channel: 'call-display', content: text },
