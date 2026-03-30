@@ -210,14 +210,14 @@ export function stopThinkingPulse(): void {
 
 /**
  * Kill all tracked play processes (SIGTERM).
+ * Processes remove themselves from the set via their close handler.
  */
 export function killAllFeedbackProcesses(): void {
   for (const proc of activePlayProcesses) {
     try {
-      proc.kill('SIGTERM')
+      if (!proc.killed) proc.kill('SIGTERM')
     } catch { /* already dead */ }
   }
-  activePlayProcesses.clear()
 }
 
 /**

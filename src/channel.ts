@@ -447,12 +447,14 @@ async function voiceLoop(): Promise<void> {
     log('voice loop already running — skipping duplicate start')
     return
   }
-  voiceLoopRunning = true
 
   if (!getRunDirFromEnv()) {
     log('no run dir (CLAUDE_CALL_RUN_DIR not set) — voice loop disabled')
     return
   }
+
+  voiceLoopRunning = true
+  try {
 
   log('loading Silero VAD model...')
   await initVAD()
@@ -644,6 +646,9 @@ async function voiceLoop(): Promise<void> {
       log(`error: ${(err as Error).message}`)
       await new Promise(r => setTimeout(r, 1000))
     }
+  }
+  } finally {
+    voiceLoopRunning = false
   }
 }
 
