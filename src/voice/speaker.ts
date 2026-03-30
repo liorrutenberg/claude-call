@@ -134,7 +134,10 @@ export async function verifySpeaker(wavPath: string): Promise<boolean> {
   if (!embedding) return true  // extraction failed = pass through (don't block)
 
   const similarity = cosineSimilarity(embedding, savedProfile.embedding)
-  return similarity >= config.speaker.threshold
+  const pass = similarity >= config.speaker.threshold
+  // Log to stderr for channel.log visibility
+  process.stderr.write(`[${new Date().toISOString()}] [speaker] similarity=${similarity.toFixed(4)} threshold=${config.speaker.threshold} ${pass ? 'PASS' : 'REJECT'}\n`)
+  return pass
 }
 
 /**

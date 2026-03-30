@@ -114,7 +114,7 @@ function defaults(): Config {
     },
     speaker: {
       enabled: false,
-      threshold: 0.55,
+      threshold: 0.35,
       modelPath: join(DATA_DIR, 'models', 'wespeaker_en_voxceleb_resnet34_LM.onnx'),
     },
   }
