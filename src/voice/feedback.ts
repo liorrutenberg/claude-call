@@ -10,7 +10,7 @@
  *   - Thinking pulse: gentle repeating tick while waiting for Claude's response
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { loadConfig, getLogDir } from '../config.js'
 
@@ -35,6 +35,7 @@ function log(msg: string): void {
 
 // ─── Active process tracking ─────────────────────────────────
 
+const activePlayProcesses = new Set<ChildProcess>()
 let thinkingTimeout: NodeJS.Timeout | null = null
 let thinkingMaxTimeout: NodeJS.Timeout | null = null // Safety cutoff
 let pulseGeneration = 0 // Monotonic counter — incremented on every start/stop to kill orphaned callbacks
@@ -51,14 +52,20 @@ function getVolume(): number {
 
 /**
  * Play a tone without waiting (fire and forget).
+ * Tracks spawned processes so they can be killed on cleanup.
  */
 function playToneAsync(args: string[], label: string): void {
   if (!isEnabled()) return
 
   log(`${label}`)
   const proc = spawn('play', args, { stdio: 'ignore' })
-  // Don't track single-shot chimes — they're short enough
-  proc.once('error', (err) => log(`play error (${label}): ${err.message}`))
+  activePlayProcesses.add(proc)
+  const cleanup = () => { activePlayProcesses.delete(proc) }
+  proc.once('close', cleanup)
+  proc.once('error', (err) => {
+    log(`play error (${label}): ${err.message}`)
+    cleanup()
+  })
 }
 
 // ─── Start/Unmute Chime ──────────────────────────────────────
@@ -202,8 +209,21 @@ export function stopThinkingPulse(): void {
 // ─── Cleanup ─────────────────────────────────────────────────
 
 /**
- * Stop all feedback sounds.
+ * Kill all tracked play processes (SIGTERM).
+ */
+export function killAllFeedbackProcesses(): void {
+  for (const proc of activePlayProcesses) {
+    try {
+      proc.kill('SIGTERM')
+    } catch { /* already dead */ }
+  }
+  activePlayProcesses.clear()
+}
+
+/**
+ * Stop all feedback sounds — kills thinking pulse and all tracked play processes.
  */
 export function stopAllFeedback(): void {
   stopThinkingPulse()
+  killAllFeedbackProcesses()
 }

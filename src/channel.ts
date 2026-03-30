@@ -42,6 +42,7 @@ import {
   playSpeechEndBeep,
   startThinkingPulse,
   stopThinkingPulse,
+  stopAllFeedback,
 } from './voice/feedback.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
@@ -393,13 +394,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 // ─── Deliver voice to Claude Code session ───────────────────
 
-async function deliver(text: string): Promise<void> {
+async function deliver(text: string): Promise<boolean> {
   log(`delivering: ${text}`)
 
   const runDir = getRunDirFromEnv()
   if (!runDir) {
     log('ERROR: No run dir available (CLAUDE_CALL_RUN_DIR not set)')
-    return
+    return false
   }
 
   const msg = {
@@ -412,8 +413,10 @@ async function deliver(text: string): Promise<void> {
   const json = JSON.stringify(msg) + '\n'
   if (writeFifo(json)) {
     log('delivered via FIFO')
+    return true
   } else {
     log('FIFO delivery failed')
+    return false
   }
 }
 
@@ -425,6 +428,11 @@ async function voiceLoop(): Promise<void> {
     return
   }
   voiceLoopRunning = true
+
+  if (!getRunDirFromEnv()) {
+    log('no run dir (CLAUDE_CALL_RUN_DIR not set) — voice loop disabled')
+    return
+  }
 
   log('loading Silero VAD model...')
   await initVAD()
@@ -603,15 +611,14 @@ async function voiceLoop(): Promise<void> {
 
       log(`heard: ${text}`)
 
-      try {
-        await deliver(text)
-        const tDelivered = Date.now()
+      const delivered = await deliver(text)
+      const tDelivered = Date.now()
+      log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
+      if (delivered) {
         log('delivered')
-        log(`pipeline: record=${t1 - t0}ms stt=${t3 - t2}ms deliver=${tDelivered - t3}ms total=${tDelivered - t0}ms`)
-        // Start thinking pulse while waiting for Claude's response
         startThinkingPulse()
-      } catch (err) {
-        log(`deliver error: ${(err as Error).message}`)
+      } else {
+        log('delivery failed — skipping thinking pulse')
       }
     } catch (err) {
       log(`error: ${(err as Error).message}`)
@@ -627,6 +634,8 @@ let cleanedUp = false
 function cleanupOnExit(): void {
   if (cleanedUp) return
   cleanedUp = true
+  stopSpeaking()
+  stopAllFeedback()
   killOwnedChildren()
   closeFifo()
 }
