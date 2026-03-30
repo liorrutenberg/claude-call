@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink'
 import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
 import { SessionInfo } from './SessionInfo.js'
+import { Settings, getSettingsCount, handleSettingsInput } from './Settings.js'
 import { readMonitorState } from './state.js'
 import { setMuteSignalIn, clearMuteSignalIn, hasMuteSignalIn, updateStatus } from '../runtime.js'
 import type { MonitorState } from './types.js'
@@ -22,20 +23,41 @@ function emptyState(): MonitorState {
 
 export function App() {
   const [state, setState] = useState<MonitorState>(emptyState)
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsIdx, setSettingsIdx] = useState(0)
 
   useEffect(() => {
-    // Initial read
     setState(readMonitorState())
-
-    // Poll for updates
     const interval = setInterval(() => {
       setState(readMonitorState())
     }, POLL_INTERVAL_MS)
-
     return () => clearInterval(interval)
   }, [])
 
-  useInput((input) => {
+  useInput((input, key) => {
+    // Toggle settings panel
+    if (input === 's') {
+      setShowSettings(prev => !prev)
+      return
+    }
+
+    // Settings navigation when panel is open
+    if (showSettings) {
+      const count = getSettingsCount()
+      if (key.upArrow) {
+        setSettingsIdx(prev => (prev - 1 + count) % count)
+      } else if (key.downArrow) {
+        setSettingsIdx(prev => (prev + 1) % count)
+      } else if (key.return || key.leftArrow || key.rightArrow) {
+        const action = key.return ? 'return' : key.leftArrow ? 'left' : 'right'
+        handleSettingsInput(action, settingsIdx)
+        // Force re-render with fresh state
+        setState(readMonitorState())
+      }
+      return
+    }
+
+    // Normal mode keybindings
     if (!state.runDir) return
     if (input === 'm') {
       if (hasMuteSignalIn(state.runDir)) {
@@ -56,14 +78,15 @@ export function App() {
       <VoiceStatus connected={state.connected} status={state.status} />
       <AgentList agents={state.agents} />
       <SessionInfo state={state} />
+      {showSettings && <Settings selectedIndex={settingsIdx} />}
       {!state.connected && (
         <Box marginTop={1}>
           <Text dimColor>Waiting for call session...</Text>
         </Box>
       )}
-      {state.connected && (
+      {!showSettings && (
         <Box marginTop={1}>
-          <Text dimColor>[m] mute/unmute</Text>
+          <Text dimColor>{state.connected ? '[m] mute/unmute  [s] settings' : '[s] settings'}</Text>
         </Box>
       )}
     </Box>
