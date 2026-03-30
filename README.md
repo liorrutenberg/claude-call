@@ -35,7 +35,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Terminal stays free** — Voice runs in a separate headless session; type normally while talking
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
-- **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
+- **Display push** — Call session pushes agent monitor events to the main session via MCP channel notification
 - **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/unmute chime, mute chime — so you always know the system state
 
 ### Voice Engine
@@ -44,7 +44,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **Whisper STT** — Local speech-to-text via whisper.cpp (server mode + CLI fallback)
 - **TTS cascade** — Piper (fast, local) → Qwen3 (best quality, opt-in) → edge-tts (Microsoft neural, free) → macOS say (fallback)
 - **Sentence pipelining** — Long responses are split into sentences; next sentence synthesizes while current plays
-- **Keyword interrupt** — Say "stop", "wait", or "hold on" to kill playback mid-sentence
+- **Keyword interrupt** — Say "stop", "hold on", or "exo" to kill playback mid-sentence
 - **Streaming preview** — Rolling-window partial transcription every 600ms during recording
 - **Pronunciation engine** — YAML dictionary for TTS text rewriting and STT vocabulary hints
 - **Configurable** — TTS engine, playback rate, silence sensitivity, interrupt keywords, and more
@@ -228,7 +228,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 
 ### Display Push
 
-The call session speaks concise summaries. When you say "show it" or "put it on screen", the call session's background agents push formatted output directly to the main session via HTTP POST to the display MCP server (`localhost:9847`), which forwards it as an MCP channel notification.
+The call session speaks concise summaries. Background agents post monitor events (dispatch/complete) via HTTP POST to the display MCP server (`localhost:9847`), which forwards them as MCP channel notifications to the main session's TUI monitor.
 
 See [docs/architecture.md](docs/architecture.md) for the voice engine internals and [docs/call-session-v2.md](docs/call-session-v2.md) for the full dual-session design.
 

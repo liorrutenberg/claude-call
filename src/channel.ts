@@ -154,10 +154,10 @@ async function waitForUnmute(): Promise<void> {
         log(`unmute check: "${raw}"`)
         if (matchesUnmute(raw)) {
           log('unmuted by voice command')
-          const resumeRunDir = getRunDirFromEnv()
-          if (resumeRunDir) {
-            clearMuteSignalIn(resumeRunDir)
-            updateStatus(resumeRunDir, { status: 'running' })
+          const runDir = getRunDirFromEnv()
+          if (runDir) {
+            clearMuteSignalIn(runDir)
+            updateStatus(runDir, { status: 'running' })
           }
           kwMonitor.stop()
           resolve()
@@ -559,7 +559,7 @@ async function voiceLoop(): Promise<void> {
           updateStatus(muteRunDir, { status: 'muted' })
         }
         try {
-          await deliver('[Voice muted — say "exo unmute" to resume]')
+          await deliver('[Voice muted — say "exo unmute" to unmute]')
         } catch { /* ignore */ }
         continue
       }
