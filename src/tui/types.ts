@@ -28,12 +28,22 @@ export interface AgentEntry {
   summary?: string
 }
 
+/** A parsed line from stdout.log for display */
+export interface LogLine {
+  type: 'text' | 'tool' | 'thinking' | 'error' | 'system'
+  content: string
+  toolName?: string
+  ts?: string
+}
+
 export interface MonitorState {
   connected: boolean
   runDir: string | null
   status: StatusFile | null
   agents: AgentEntry[]
   uptimeMs: number
+  claudeSessionId: string | null
+  logLines: LogLine[]
   agentCounts: {
     total: number
     active: number

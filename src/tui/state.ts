@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveActiveRunDir } from '../runtime.js'
-import type { StatusFile, AgentEvent, AgentEntry, MonitorState } from './types.js'
+import type { StatusFile, AgentEvent, AgentEntry, LogLine, MonitorState } from './types.js'
 
 // Re-export for convenience
 export { resolveActiveRunDir }
@@ -111,6 +111,106 @@ function readAgents(runDir: string): AgentEntry[] {
 }
 
 /**
+ * Parse stdout.log JSONL into displayable log lines.
+ * Returns { claudeSessionId, lines }.
+ *
+ * Incremental: caches parsed results, only re-reads new bytes on subsequent calls.
+ */
+let logCache: { path: string; offset: number; claudeSessionId: string | null; lines: LogLine[] } | null = null
+
+function parseStdoutLog(runDir: string): { claudeSessionId: string | null; lines: LogLine[] } {
+  const logPath = join(runDir, 'stdout.log')
+  if (!existsSync(logPath)) return { claudeSessionId: null, lines: [] }
+
+  // Check if we can use cached results
+  let startOffset = 0
+  let claudeSessionId: string | null = null
+  let lines: LogLine[] = []
+
+  if (logCache && logCache.path === logPath) {
+    startOffset = logCache.offset
+    claudeSessionId = logCache.claudeSessionId
+    lines = [...logCache.lines]
+  }
+
+  try {
+    const fd = require('node:fs').openSync(logPath, 'r')
+    const stat = require('node:fs').fstatSync(fd)
+    if (stat.size <= startOffset) {
+      require('node:fs').closeSync(fd)
+      return { claudeSessionId, lines }
+    }
+    const buf = Buffer.alloc(stat.size - startOffset)
+    require('node:fs').readSync(fd, buf, 0, buf.length, startOffset)
+    require('node:fs').closeSync(fd)
+
+    const newContent = buf.toString('utf-8')
+    for (const raw of newContent.split('\n')) {
+      if (!raw.trim()) continue
+      try {
+        const msg = JSON.parse(raw)
+
+        // Extract Claude session ID from init
+        if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
+          claudeSessionId = msg.session_id
+          continue
+        }
+
+        // Skip noise
+        if (msg.type === 'rate_limit_event') continue
+
+        // Tool errors from user messages (is_error: true)
+        if (msg.type === 'user' && msg.message?.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'tool_result' && block.is_error) {
+              const errText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+              lines.push({ type: 'error', content: errText })
+            }
+          }
+          continue
+        }
+
+        // Assistant messages
+        if (msg.type === 'assistant' && msg.message?.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'text' && block.text) {
+              lines.push({ type: 'text', content: block.text })
+            } else if (block.type === 'tool_use') {
+              const input = block.input || {}
+              let summary = block.name
+              // Show spoken text for voice
+              if (block.name === 'mcp__voice__speak' && input.text) {
+                summary = `speak: "${input.text}"`
+              } else if (input.command) summary += `: ${input.command}`
+              else if (input.file_path) summary += `: ${input.file_path}`
+              else if (input.pattern) summary += `: ${input.pattern}`
+              else if (input.prompt) summary += `: ${String(input.prompt).slice(0, 80)}...`
+              else if (input.description) summary += `: ${input.description}`
+              lines.push({ type: 'tool', content: summary, toolName: block.name })
+            }
+          }
+        }
+
+        // Result errors only (skip success — duplicates assistant text)
+        if (msg.type === 'result' && msg.subtype !== 'success') {
+          const err = msg.errors?.join(', ') || 'Unknown error'
+          lines.push({ type: 'error', content: err })
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    // Update cache
+    logCache = { path: logPath, offset: stat.size, claudeSessionId, lines: [...lines] }
+  } catch {
+    // File read error
+  }
+
+  return { claudeSessionId, lines }
+}
+
+/**
  * Read all monitor state from the active run directory.
  */
 export function readMonitorState(): MonitorState {
@@ -123,12 +223,15 @@ export function readMonitorState(): MonitorState {
       status: null,
       agents: [],
       uptimeMs: 0,
+      claudeSessionId: null,
+      logLines: [],
       agentCounts: { total: 0, active: 0 },
     }
   }
 
   const status = readStatus(runDir)
   const agents = readAgents(runDir)
+  const { claudeSessionId, lines } = parseStdoutLog(runDir)
   const now = Date.now()
   const uptimeMs = status ? now - new Date(status.startedAt).getTime() : 0
 
@@ -138,6 +241,8 @@ export function readMonitorState(): MonitorState {
     status,
     agents,
     uptimeMs,
+    claudeSessionId,
+    logLines: lines,
     agentCounts: {
       total: agents.length,
       active: agents.filter(a => a.status === 'running').length,

@@ -4,12 +4,14 @@ import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
 import { AgentDetail } from './AgentDetail.js'
 import { SessionInfo } from './SessionInfo.js'
+import { SessionLog } from './SessionLog.js'
 import { Settings, getSettingsCount, handleSettingsInput } from './Settings.js'
 import { readMonitorState } from './state.js'
 import { setMuteSignalIn, clearMuteSignalIn, hasMuteSignalIn, updateStatus } from '../runtime.js'
 import type { MonitorState } from './types.js'
 
 const POLL_INTERVAL_MS = 1500
+const LOG_MAX_HEIGHT = 15
 
 function emptyState(): MonitorState {
   return {
@@ -18,35 +20,62 @@ function emptyState(): MonitorState {
     status: null,
     agents: [],
     uptimeMs: 0,
+    claudeSessionId: null,
+    logLines: [],
     agentCounts: { total: 0, active: 0 },
   }
 }
 
+type ViewMode = 'main' | 'settings' | 'agent' | 'log'
+
 export function App() {
   const [state, setState] = useState<MonitorState>(emptyState)
-  const [showSettings, setShowSettings] = useState(false)
+  const [viewMode, setViewMode] = useState<ViewMode>('main')
   const [settingsIdx, setSettingsIdx] = useState(0)
   const [agentIdx, setAgentIdx] = useState(-1)
-  const [viewingAgent, setViewingAgent] = useState(false)
+  const [logScroll, setLogScroll] = useState(0)
+  const [autoScroll, setAutoScroll] = useState(true)
 
   useEffect(() => {
     setState(readMonitorState())
     const interval = setInterval(() => {
-      setState(readMonitorState())
+      setState(prev => {
+        const next = readMonitorState()
+        // Auto-scroll to bottom when new lines arrive
+        if (autoScroll && next.logLines.length > prev.logLines.length) {
+          setLogScroll(Math.max(0, next.logLines.length - LOG_MAX_HEIGHT))
+        }
+        return next
+      })
     }, POLL_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [])
+  }, [autoScroll])
 
   useInput((input, key) => {
-    // Toggle settings panel
+    // Toggle settings
     if (input === 's') {
-      setShowSettings(prev => !prev)
-      setViewingAgent(false)
+      setViewMode(prev => prev === 'settings' ? 'main' : 'settings')
       return
     }
 
-    // Settings navigation when panel is open
-    if (showSettings) {
+    // Toggle voice log viewer
+    if (input === 'v' && state.connected) {
+      if (viewMode === 'log') {
+        setViewMode('main')
+      } else {
+        setViewMode('log')
+        setAutoScroll(true)
+        setLogScroll(Math.max(0, state.logLines.length - LOG_MAX_HEIGHT))
+      }
+      return
+    }
+
+    // Settings navigation
+    if (viewMode === 'settings') {
+      if (key.escape) {
+        setViewMode('main')
+        return
+      }
       const count = getSettingsCount()
       if (key.upArrow) {
         setSettingsIdx(prev => (prev - 1 + count) % count)
@@ -60,7 +89,24 @@ export function App() {
       return
     }
 
-    // Agent navigation
+    // Log viewer scroll
+    if (viewMode === 'log') {
+      if (key.upArrow) {
+        setAutoScroll(false)
+        setLogScroll(prev => Math.max(0, prev - 1))
+      } else if (key.downArrow) {
+        setLogScroll(prev => {
+          const next = Math.min(prev + 1, Math.max(0, state.logLines.length - LOG_MAX_HEIGHT))
+          if (next >= state.logLines.length - LOG_MAX_HEIGHT) setAutoScroll(true)
+          return next
+        })
+      } else if (key.escape) {
+        setViewMode('main')
+      }
+      return
+    }
+
+    // Agent navigation (main mode)
     const agentCount = state.agents.length
     if (agentCount > 0) {
       if (key.upArrow) {
@@ -70,18 +116,18 @@ export function App() {
         setAgentIdx(prev => prev >= agentCount - 1 ? 0 : prev + 1)
         return
       } else if (key.return && agentIdx >= 0 && agentIdx < agentCount) {
-        setViewingAgent(prev => !prev)
+        setViewMode(prev => prev === 'agent' ? 'main' : 'agent')
         return
       }
     }
 
-    // Escape closes detail pane
+    // Escape closes any pane
     if (key.escape) {
-      setViewingAgent(false)
+      setViewMode('main')
       return
     }
 
-    // Normal mode keybindings
+    // Mute toggle
     if (!state.runDir) return
     if (input === 'm') {
       if (hasMuteSignalIn(state.runDir)) {
@@ -104,17 +150,20 @@ export function App() {
       <VoiceStatus connected={state.connected} status={state.status} />
       <AgentList agents={state.agents} selectedIndex={agentIdx} />
       <SessionInfo state={state} />
-      {showSettings && <Settings selectedIndex={settingsIdx} />}
-      {viewingAgent && selectedAgent && <AgentDetail agent={selectedAgent} />}
+      {viewMode === 'settings' && <Settings selectedIndex={settingsIdx} />}
+      {viewMode === 'agent' && selectedAgent && <AgentDetail agent={selectedAgent} />}
+      {viewMode === 'log' && (
+        <SessionLog lines={state.logLines} scrollOffset={logScroll} maxHeight={LOG_MAX_HEIGHT} />
+      )}
       {!state.connected && (
         <Box marginTop={1}>
           <Text dimColor>Waiting for call session...</Text>
         </Box>
       )}
-      {!showSettings && (
+      {viewMode === 'main' && (
         <Box marginTop={1}>
           <Text dimColor>
-            {state.connected ? '[m] mute  [s] settings' : '[s] settings'}
+            {state.connected ? '[m] mute  [s] settings  [v] voice log' : '[s] settings'}
             {state.agents.length > 0 ? '  [\u2191\u2193] agents  [\u23CE] inspect' : ''}
           </Text>
         </Box>
