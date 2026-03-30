@@ -37,7 +37,7 @@ import {
 } from './voice/recorder.js'
 import {
   playStartChime,
-  playPauseChime,
+  playMuteChime,
   playSpeechStartBeep,
   playSpeechEndBeep,
   startThinkingPulse,
@@ -551,7 +551,7 @@ async function voiceLoop(): Promise<void> {
       // Soft mute trigger — "exo mute" keeps mic alive but stops processing
       // Must check BEFORE wake word stripping so "exo mute" matches
       if (matchesMute(text)) {
-        playPauseChime()
+        playMuteChime()
         log(`mute triggered: "${text}"`)
         const muteRunDir = getRunDirFromEnv()
         if (muteRunDir) {

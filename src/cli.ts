@@ -130,7 +130,7 @@ Example: "While you were muted, the sync finished and found 3 overdue items. Wan
 ## Don'ts
 
 - Never go silent without acking
-- Never use Write, Edit, Bash, Grep, or Glob directly — always delegate to agents
+- Never use Write, Edit, Grep, or Glob directly — always delegate to agents (Bash is allowed only for monitor event curls)
 - Never do multi-step work inline — dispatch an agent`
 }
 

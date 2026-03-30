@@ -21,8 +21,7 @@ In both modes, Claude calls the `speak` tool exposed by the MCP server for TTS o
 The main loop in `channel.ts` runs continuously:
 
 ```
-┌─→ Check muted? ──→ (sleep 100ms, retry) ──→ ↑
-│   Check paused? ──→ (sleep 500ms, retry) ──→ ↑
+┌─→ Check muted? ──→ waitForUnmute() ──→ ↑
 │
 │   Record utterance (sox + VAD)
 │   │  ├─ VAD detects speech start → begin preview timer
@@ -116,7 +115,7 @@ Sox `rec` is used for mic input. Key details:
 - **Native rate detection**: Probes the default input device's sample rate to avoid resampling artifacts
 - **Resampling**: If native rate differs from 16 kHz, linear interpolation downsamples in-process
 - **WAV creation**: Raw PCM is wrapped in a WAV header (44 bytes) for Whisper compatibility
-- **Signal files**: Per-run `stop` and `pause` files in `~/.claude-call/runs/<project-hash>/` for cross-process coordination
+- **Signal files**: Per-run `stop` and `mute` files in `~/.claude-call/runs/<project-hash>/` for cross-process coordination
 
 ## Data Flow
 

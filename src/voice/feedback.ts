@@ -5,8 +5,8 @@
  * Separate from TTS playback (has its own process tracking).
  *
  * Three sounds:
- *   - Start/resume chime: short ascending tone when call activates or unpauses
- *   - Pause chime: short descending tone when call pauses
+ *   - Start/unmute chime: short ascending tone when call activates or unmutes
+ *   - Mute chime: short descending tone when call mutes
  *   - Thinking pulse: gentle repeating tick while waiting for Claude's response
  */
 
@@ -61,10 +61,10 @@ function playToneAsync(args: string[], label: string): void {
   proc.once('error', (err) => log(`play error (${label}): ${err.message}`))
 }
 
-// ─── Start/Resume Chime ──────────────────────────────────────
+// ─── Start/Unmute Chime ──────────────────────────────────────
 
 /**
- * Play start/resume chime — short ascending tone.
+ * Play start/unmute chime — short ascending tone.
  * Two quick notes: 600Hz then 800Hz.
  */
 export function playStartChime(): void {
@@ -79,13 +79,13 @@ export function playStartChime(): void {
   ], 'start chime')
 }
 
-// ─── Pause Chime ─────────────────────────────────────────────
+// ─── Mute Chime ──────────────────────────────────────────────
 
 /**
- * Play pause chime — short descending tone.
+ * Play mute chime — short descending tone.
  * Two quick notes: 800Hz then 500Hz.
  */
-export function playPauseChime(): void {
+export function playMuteChime(): void {
   const vol = getVolume()
   // Two-tone descending chime (colon chains synth commands)
   playToneAsync([
@@ -94,7 +94,7 @@ export function playPauseChime(): void {
     'synth', '0.12', 'sine', '500',
     'vol', String(vol),
     'fade', 'q', '0.01', '-0', '0.02',
-  ], 'pause chime')
+  ], 'mute chime')
 }
 
 // ─── Speech Detection Beeps ─────────────────────────────────
