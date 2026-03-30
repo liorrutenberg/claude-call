@@ -45,7 +45,7 @@ import {
 } from './voice/feedback.js'
 import type { RecordOptions } from './voice/recorder.js'
 import { applySttCorrections } from './voice/pronunciation.js'
-import { getRunDirFromEnv, getFifoPath, updateStatus } from './runtime.js'
+import { getRunDirFromEnv, getFifoPath, updateStatus, setMuteSignalIn, clearMuteSignalIn } from './runtime.js'
 
 // ─── Junk transcript filter ────────────────────────────────
 
@@ -158,10 +158,12 @@ async function waitForUnmute(): Promise<void> {
         const raw = normalizeText(await transcribeFast(wavPath)).toLowerCase()
         log(`unmute check: "${raw}"`)
         if (matchesUnmute(raw)) {
-          userMuted = false
           log('unmuted by voice command')
           const resumeRunDir = getRunDirFromEnv()
-          if (resumeRunDir) updateStatus(resumeRunDir, { status: 'running' })
+          if (resumeRunDir) {
+            clearMuteSignalIn(resumeRunDir)
+            updateStatus(resumeRunDir, { status: 'running' })
+          }
           kwMonitor.stop()
           resolve()
         }
@@ -170,9 +172,9 @@ async function waitForUnmute(): Promise<void> {
       }
     }
 
-    // Also exit if hard-muted or externally unmuted
+    // Also exit if externally unmuted (CLI or TUI cleared the signal file)
     const check = setInterval(() => {
-      if (!userMuted || isMuted()) {
+      if (!isMuted()) {
         clearInterval(check)
         kwMonitor.stop()
         resolve()
@@ -184,7 +186,6 @@ async function waitForUnmute(): Promise<void> {
 // ─── State ──────────────────────────────────────────────────
 
 let ttsMuted = false
-let userMuted = false
 let voiceLoopRunning = false
 let sessionDead = false
 
@@ -320,8 +321,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             resolve('cancelled')
             return
           }
-          // Check if muted (voice command or external signal)
-          if (userMuted || isMuted()) {
+          // Check if muted (signal file — unified source of truth)
+          if (isMuted()) {
             resolve('muted')
             return
           }
@@ -462,15 +463,10 @@ async function voiceLoop(): Promise<void> {
       }
 
       if (isMuted()) {
-        await new Promise(r => setTimeout(r, 500))
-        continue
-      }
-
-      if (userMuted) {
         await waitForUnmute()
-        if (userMuted) continue // hard mute or other exit
+        if (isMuted()) continue // still muted somehow
         playStartChime()
-        log('voice loop resumed from user mute')
+        log('voice loop resumed from mute')
         await deliver('[Voice unmuted]')
         continue
       }
@@ -560,11 +556,13 @@ async function voiceLoop(): Promise<void> {
       // Soft mute trigger — "exo mute" keeps mic alive but stops processing
       // Must check BEFORE wake word stripping so "exo mute" matches
       if (matchesMute(text)) {
-        userMuted = true
         playPauseChime()
-        log(`soft mute triggered: "${text}"`)
+        log(`mute triggered: "${text}"`)
         const muteRunDir = getRunDirFromEnv()
-        if (muteRunDir) updateStatus(muteRunDir, { status: 'muted' })
+        if (muteRunDir) {
+          setMuteSignalIn(muteRunDir)
+          updateStatus(muteRunDir, { status: 'muted' })
+        }
         try {
           await deliver('[Voice muted — say "exo unmute" to resume]')
         } catch { /* ignore */ }

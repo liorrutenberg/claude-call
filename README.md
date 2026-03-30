@@ -36,7 +36,7 @@ You speak → sox records → Silero VAD detects speech → Whisper transcribes 
 - **`/call-start` and `/call-stop`** — Start and stop voice from any Claude Code session
 - **Background delegation** — Call session dispatches heavy work (memory searches, file reads, multi-step research) to background agents so you never wait in silence
 - **Display push** — Call session agents push formatted output directly to the main session via MCP channel notification
-- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/resume chime, pause chime — so you always know the system state
+- **Audio feedback** — Speech start/end beeps (VAD confirmation), thinking pulse, start/unmute chime, mute chime — so you always know the system state
 
 ### Voice Engine
 - **Continuous listening** — Silero VAD (ONNX, <1% CPU) detects when you start and stop speaking
@@ -94,7 +94,7 @@ Add `~/.claude-call/bin` to your PATH, then:
 ```bash
 eld       # Claude + voice (like cld)
 eldc      # Claude + voice, continue last conversation
-eldr      # Claude + voice, resume last conversation
+eldr      # Claude + voice, continue last conversation (resume)
 ```
 
 Voice starts automatically and stops when you exit Claude. No manual cleanup needed.
@@ -132,10 +132,10 @@ Once a voice session is active, you can control it hands-free:
 | Command | What it does |
 |---|---|
 | **"exo"** | Say the wake word while Claude is speaking to **interrupt** playback mid-sentence |
-| **"exo pause"** | **Pause** voice input — the mic stays alive but stops processing speech |
-| **"exo start"** | **Resume** voice input after a pause |
+| **"exo mute"** | **Mute** voice input — mic listens only for unmute, agents keep running |
+| **"exo unmute"** / **"exo start"** | **Unmute** voice input — Claude summarizes what happened while muted |
 
-Whisper sometimes mishears these phrases, so common variants (e.g., "echo pause", "exo resume") are recognized automatically.
+Whisper sometimes mishears these phrases, so common variants (e.g., "echo mute", "echo unmute") are recognized automatically.
 
 > **Configurable:** The interrupt keywords and wake word can be changed in `~/.claude-call/config.yaml` under the `interrupt.keywords` section. See [docs/configuration.md](docs/configuration.md) for details.
 
@@ -160,11 +160,9 @@ silence:
 interrupt:
   keywords:
     - stop
-    - step
-    - wait
     - hold on
     - pause
-    - hey
+    - exo
 
 pronunciation:
   file: ""            # path to custom pronunciation.yaml
@@ -222,8 +220,8 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 │  ┌───────────────────────────┐  │
 │  │ Speech start/end beeps    │  │
 │  │ Thinking pulse (waiting)  │  │
-│  │ Start / resume chime      │  │
-│  │ Pause chime               │  │
+│  │ Start / unmute chime       │  │
+│  │ Mute chime                │  │
 │  └───────────────────────────┘  │
 └─────────────────────────────────┘
 ```
@@ -283,8 +281,8 @@ claude-call check       # Verify dependencies and models
 claude-call serve       # Start MCP server (used by Claude Code)
 claude-call call start  # Start a voice call session
 claude-call call stop   # Stop the current call session
-claude-call call pause  # Pause the call session
-claude-call call resume # Resume a paused call session
+claude-call call mute   # Mute voice input (agents keep running)
+claude-call call unmute # Unmute voice input
 claude-call call status # Show call session status
 ```
 
