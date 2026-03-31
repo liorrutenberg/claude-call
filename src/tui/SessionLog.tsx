@@ -7,7 +7,7 @@ interface Props {
   maxHeight: number
 }
 
-function LogEntry({ line }: { line: LogLine }) {
+export function LogEntry({ line }: { line: LogLine }) {
   switch (line.type) {
     case 'tool':
       return (

@@ -3,9 +3,83 @@
  * Reads status.json and agents.jsonl from the active run directory.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, openSync, fstatSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveActiveRunDir } from '../runtime.js'
+
+// Find a background agent's output file.
+// Claude Code stores agent output at /private/tmp/claude-<uid>/<slug>/<sessionId>/tasks/<agentId>.output
+export function findAgentOutput(parentSessionId: string, hookAgentId: string): string | null {
+  const uid = process.getuid?.() ?? 501
+  const tmpBase = join('/private/tmp', `claude-${uid}`)
+  if (!existsSync(tmpBase)) return null
+  try {
+    for (const slug of readdirSync(tmpBase)) {
+      const candidate = join(tmpBase, slug, parentSessionId, 'tasks', `${hookAgentId}.output`)
+      if (existsSync(candidate)) return candidate
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+/**
+ * Parse a Claude Code session JSONL transcript into LogLines.
+ * Same format as stdout.log but with some extra message types to skip.
+ */
+export function parseSessionTranscript(filePath: string): LogLine[] {
+  const lines: LogLine[] = []
+  try {
+    const content = readFileSync(filePath, 'utf-8')
+    for (const raw of content.split('\n')) {
+      if (!raw.trim()) continue
+      try {
+        const msg = JSON.parse(raw)
+
+        // Skip non-content types
+        if (msg.type === 'queue-operation' || msg.type === 'system' ||
+            msg.type === 'rate_limit_event' || msg.type === 'summary') continue
+
+        // Tool errors
+        if (msg.type === 'user' && msg.message?.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'tool_result' && block.is_error) {
+              const errText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+              lines.push({ type: 'error', content: errText })
+            }
+          }
+          continue
+        }
+
+        // Assistant messages
+        if (msg.type === 'assistant' && msg.message?.content) {
+          for (const block of msg.message.content) {
+            if (block.type === 'text' && block.text) {
+              lines.push({ type: 'text', content: block.text })
+            } else if (block.type === 'tool_use') {
+              const input = block.input || {}
+              let summary = block.name
+              if (block.name === 'mcp__voice__speak' && input.text) {
+                summary = `speak: "${input.text}"`
+              } else if (input.command) summary += `: ${input.command}`
+              else if (input.file_path) summary += `: ${input.file_path}`
+              else if (input.pattern) summary += `: ${input.pattern}`
+              else if (input.prompt) summary += `: ${String(input.prompt).slice(0, 80)}...`
+              else if (input.description) summary += `: ${input.description}`
+              lines.push({ type: 'tool', content: summary, toolName: block.name })
+            }
+          }
+        }
+
+        // Result errors
+        if (msg.type === 'result' && msg.subtype !== 'success') {
+          const err = msg.errors?.join(', ') || 'Unknown error'
+          lines.push({ type: 'error', content: err })
+        }
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* file read error */ }
+  return lines
+}
 import type { StatusFile, AgentEvent, AgentEntry, LogLine, SessionRegistration, MonitorState } from './types.js'
 
 // Re-export for convenience
@@ -134,15 +208,21 @@ function parseStdoutLog(runDir: string): { claudeSessionId: string | null; lines
   }
 
   try {
-    const fd = require('node:fs').openSync(logPath, 'r')
-    const stat = require('node:fs').fstatSync(fd)
+    const fd = openSync(logPath, 'r')
+    const stat = fstatSync(fd)
+    // File was truncated/recreated (new session) — reset cache
+    if (stat.size < startOffset) {
+      startOffset = 0
+      claudeSessionId = null
+      lines = []
+    }
     if (stat.size <= startOffset) {
-      require('node:fs').closeSync(fd)
+      closeSync(fd)
       return { claudeSessionId, lines }
     }
     const buf = Buffer.alloc(stat.size - startOffset)
-    require('node:fs').readSync(fd, buf, 0, buf.length, startOffset)
-    require('node:fs').closeSync(fd)
+    readSync(fd, buf, 0, buf.length, startOffset)
+    closeSync(fd)
 
     const newContent = buf.toString('utf-8')
     for (const raw of newContent.split('\n')) {
@@ -257,14 +337,27 @@ export function readMonitorState(): MonitorState {
   const now = Date.now()
   const uptimeMs = status ? now - new Date(status.startedAt).getTime() : 0
 
-  // Merge claude session IDs from hook registrations into agent entries
-  // Match by agent_type containing the agent name (best effort)
+  // Merge claude session IDs from hook registrations into agent entries.
+  // agent_type is generic ("general-purpose"), so match by time proximity:
+  // find the closest session registration within 30s of the agent dispatch.
+  const usedSessions = new Set<number>()
   for (const agent of agents) {
-    const match = sessions.find(s =>
-      s.agent_type.toLowerCase().includes(agent.name.toLowerCase()) ||
-      agent.name.toLowerCase().includes(s.agent_type.toLowerCase())
-    )
-    if (match) agent.claudeSessionId = match.session_id
+    const agentTs = agent.startedAt.getTime()
+    let bestIdx = -1
+    let bestDiff = 30_000 // max 30s window
+    for (let i = 0; i < sessions.length; i++) {
+      if (usedSessions.has(i)) continue
+      const diff = Math.abs(new Date(sessions[i].ts).getTime() - agentTs)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        bestIdx = i
+      }
+    }
+    if (bestIdx >= 0) {
+      usedSessions.add(bestIdx)
+      agent.claudeSessionId = sessions[bestIdx].session_id
+      agent.hookAgentId = sessions[bestIdx].agent_id
+    }
   }
 
   return {

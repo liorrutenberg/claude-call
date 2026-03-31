@@ -25,7 +25,7 @@ function AgentRow({ agent, selected }: { agent: AgentEntry; selected: boolean })
     <Box>
       <Text color={selected ? 'cyan' : undefined} bold={selected}>{prefix} </Text>
       <Text color={statusColor}>{statusIcon} </Text>
-      <Text color={selected ? 'cyan' : undefined} bold={selected}>{agent.name.padEnd(16)}</Text>
+      <Text color={selected ? 'cyan' : undefined} bold={selected}>{agent.name.padEnd(20)}</Text>
       <Text color={statusColor}>{agent.status.padEnd(10)}</Text>
       <Text dimColor>{elapsed}</Text>
     </Box>

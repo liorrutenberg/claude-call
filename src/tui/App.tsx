@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { spawn } from 'node:child_process'
+import { openSync, closeSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
 import { AgentDetail } from './AgentDetail.js'
@@ -29,12 +31,26 @@ function emptyState(): MonitorState {
 
 type ViewMode = 'main' | 'settings' | 'agent' | 'log' | 'input'
 
-function sendToAgent(sessionId: string, message: string): void {
-  const proc = spawn('claude', ['--resume', sessionId, '-p', message, '--permission-mode', 'bypassPermissions'], {
+function sendToAgent(voiceSessionId: string, hookAgentId: string, _agentName: string, message: string, runDir: string | null): void {
+  // Sanitize user input — strip quotes to prevent prompt injection
+  const safeMessage = message.replace(/["'`\\]/g, '')
+  const relayMsg = `[SILENT RELAY — do NOT speak, do NOT call speak(). Use SendMessage tool with to: '${hookAgentId}' and message: "${safeMessage}". Do NOT launch a new agent. Just call SendMessage and reply with text only.]`
+
+  let outFd: number | undefined
+  let stdio: any = 'ignore'
+  if (runDir) {
+    const sessDir = join(runDir, 'sessions')
+    mkdirSync(sessDir, { recursive: true })
+    outFd = openSync(join(sessDir, `${hookAgentId}.log`), 'a')
+    stdio = ['ignore', outFd, outFd]
+  }
+  const proc = spawn('claude', ['--resume', voiceSessionId, '-p', relayMsg, '--permission-mode', 'bypassPermissions'], {
     detached: true,
-    stdio: 'ignore',
+    stdio,
   })
   proc.unref()
+  // Close parent's copy of the fd — child process inherited it
+  if (outFd !== undefined) closeSync(outFd)
 }
 
 export function App() {
@@ -78,8 +94,8 @@ export function App() {
       }
       if (key.return) {
         const agent = agentIdx >= 0 && agentIdx < state.agents.length ? state.agents[agentIdx] : null
-        if (agent?.claudeSessionId && inputText.trim()) {
-          sendToAgent(agent.claudeSessionId, inputText.trim())
+        if (agent?.claudeSessionId && agent.hookAgentId && inputText.trim()) {
+          sendToAgent(agent.claudeSessionId, agent.hookAgentId, agent.name, inputText.trim(), state.runDir)
           setSendStatus(`Sent to ${agent.name}`)
         }
         setInputText('')
@@ -114,10 +130,10 @@ export function App() {
       return
     }
 
-    // Enter input mode for finished agent with session ID
+    // Enter input mode for agent with session ID (running or finished)
     if (input === 'i' && viewMode === 'agent') {
       const agent = agentIdx >= 0 && agentIdx < state.agents.length ? state.agents[agentIdx] : null
-      if (agent?.claudeSessionId && agent.status === 'done') {
+      if (agent?.claudeSessionId) {
         setViewMode('input')
         setInputText('')
         return
@@ -205,7 +221,7 @@ export function App() {
       <AgentList agents={state.agents} selectedIndex={agentIdx} />
       <SessionInfo state={state} />
       {viewMode === 'settings' && <Settings selectedIndex={settingsIdx} />}
-      {(viewMode === 'agent' || viewMode === 'input') && selectedAgent && <AgentDetail agent={selectedAgent} />}
+      {(viewMode === 'agent' || viewMode === 'input') && selectedAgent && <AgentDetail agent={selectedAgent} runDir={state.runDir} />}
       {viewMode === 'input' && (
         <Box marginTop={1}>
           <Text color="cyan">{'\u276f'} </Text>

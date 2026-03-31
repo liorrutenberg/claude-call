@@ -27,6 +27,7 @@ export interface AgentEntry {
   elapsedMs: number
   summary?: string
   claudeSessionId?: string
+  hookAgentId?: string
 }
 
 export interface SessionRegistration {
