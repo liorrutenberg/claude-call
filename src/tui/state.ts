@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveActiveRunDir } from '../runtime.js'
-import type { StatusFile, AgentEvent, AgentEntry, LogLine, MonitorState } from './types.js'
+import type { StatusFile, AgentEvent, AgentEntry, LogLine, SessionRegistration, MonitorState } from './types.js'
 
 // Re-export for convenience
 export { resolveActiveRunDir }
@@ -211,6 +211,27 @@ function parseStdoutLog(runDir: string): { claudeSessionId: string | null; lines
 }
 
 /**
+ * Read sessions.jsonl — maps subagent claude session IDs to agent types.
+ */
+function readSessions(runDir: string): SessionRegistration[] {
+  const sessionsPath = join(runDir, 'sessions.jsonl')
+  if (!existsSync(sessionsPath)) return []
+
+  const registrations: SessionRegistration[] = []
+  try {
+    const content = readFileSync(sessionsPath, 'utf-8')
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        registrations.push(JSON.parse(line) as SessionRegistration)
+      } catch { /* skip */ }
+    }
+  } catch { /* file read error */ }
+
+  return registrations
+}
+
+/**
  * Read all monitor state from the active run directory.
  */
 export function readMonitorState(): MonitorState {
@@ -231,9 +252,20 @@ export function readMonitorState(): MonitorState {
 
   const status = readStatus(runDir)
   const agents = readAgents(runDir)
+  const sessions = readSessions(runDir)
   const { claudeSessionId, lines } = parseStdoutLog(runDir)
   const now = Date.now()
   const uptimeMs = status ? now - new Date(status.startedAt).getTime() : 0
+
+  // Merge claude session IDs from hook registrations into agent entries
+  // Match by agent_type containing the agent name (best effort)
+  for (const agent of agents) {
+    const match = sessions.find(s =>
+      s.agent_type.toLowerCase().includes(agent.name.toLowerCase()) ||
+      agent.name.toLowerCase().includes(s.agent_type.toLowerCase())
+    )
+    if (match) agent.claudeSessionId = match.session_id
+  }
 
   return {
     connected: true,

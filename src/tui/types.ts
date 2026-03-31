@@ -26,6 +26,14 @@ export interface AgentEntry {
   completedAt?: Date
   elapsedMs: number
   summary?: string
+  claudeSessionId?: string
+}
+
+export interface SessionRegistration {
+  session_id: string
+  agent_id: string
+  agent_type: string
+  ts: string
 }
 
 /** A parsed line from stdout.log for display */

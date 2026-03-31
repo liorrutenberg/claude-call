@@ -49,6 +49,13 @@ export function AgentDetail({ agent }: Props) {
           <Text dimColor>  working...</Text>
         </Box>
       )}
+      {agent.claudeSessionId && !running && (
+        <Box marginTop={1}>
+          <Text dimColor>  session: </Text>
+          <Text color="gray">{agent.claudeSessionId.slice(0, 8)}...</Text>
+          <Text dimColor> [i] send message</Text>
+        </Box>
+      )}
     </Box>
   )
 }
