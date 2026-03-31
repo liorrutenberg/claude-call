@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Box, Text, useInput } from 'ink'
+import { spawn } from 'node:child_process'
 import { VoiceStatus } from './VoiceStatus.js'
 import { AgentList } from './AgentList.js'
 import { AgentDetail } from './AgentDetail.js'
@@ -26,7 +27,15 @@ function emptyState(): MonitorState {
   }
 }
 
-type ViewMode = 'main' | 'settings' | 'agent' | 'log'
+type ViewMode = 'main' | 'settings' | 'agent' | 'log' | 'input'
+
+function sendToAgent(sessionId: string, message: string): void {
+  const proc = spawn('claude', ['--resume', sessionId, '-p', message, '--permission-mode', 'bypassPermissions'], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  proc.unref()
+}
 
 export function App() {
   const [state, setState] = useState<MonitorState>(emptyState)
@@ -35,13 +44,14 @@ export function App() {
   const [agentIdx, setAgentIdx] = useState(-1)
   const [logScroll, setLogScroll] = useState(0)
   const [autoScroll, setAutoScroll] = useState(true)
+  const [inputText, setInputText] = useState('')
+  const [sendStatus, setSendStatus] = useState<string | null>(null)
 
   useEffect(() => {
     setState(readMonitorState())
     const interval = setInterval(() => {
       setState(prev => {
         const next = readMonitorState()
-        // Auto-scroll to bottom when new lines arrive
         if (autoScroll && next.logLines.length > prev.logLines.length) {
           setLogScroll(Math.max(0, next.logLines.length - LOG_MAX_HEIGHT))
         }
@@ -51,7 +61,41 @@ export function App() {
     return () => clearInterval(interval)
   }, [autoScroll])
 
+  // Clear send status after 3 seconds
+  useEffect(() => {
+    if (!sendStatus) return
+    const timer = setTimeout(() => setSendStatus(null), 3000)
+    return () => clearTimeout(timer)
+  }, [sendStatus])
+
   useInput((input, key) => {
+    // Input mode: capture text
+    if (viewMode === 'input') {
+      if (key.escape) {
+        setViewMode('agent')
+        setInputText('')
+        return
+      }
+      if (key.return) {
+        const agent = agentIdx >= 0 && agentIdx < state.agents.length ? state.agents[agentIdx] : null
+        if (agent?.claudeSessionId && inputText.trim()) {
+          sendToAgent(agent.claudeSessionId, inputText.trim())
+          setSendStatus(`Sent to ${agent.name}`)
+        }
+        setInputText('')
+        setViewMode('agent')
+        return
+      }
+      if (key.backspace || key.delete) {
+        setInputText(prev => prev.slice(0, -1))
+        return
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setInputText(prev => prev + input)
+      }
+      return
+    }
+
     // Toggle settings
     if (input === 's') {
       setViewMode(prev => prev === 'settings' ? 'main' : 'settings')
@@ -68,6 +112,16 @@ export function App() {
         setLogScroll(Math.max(0, state.logLines.length - LOG_MAX_HEIGHT))
       }
       return
+    }
+
+    // Enter input mode for finished agent with session ID
+    if (input === 'i' && viewMode === 'agent') {
+      const agent = agentIdx >= 0 && agentIdx < state.agents.length ? state.agents[agentIdx] : null
+      if (agent?.claudeSessionId && agent.status === 'done') {
+        setViewMode('input')
+        setInputText('')
+        return
+      }
     }
 
     // Settings navigation
@@ -151,9 +205,21 @@ export function App() {
       <AgentList agents={state.agents} selectedIndex={agentIdx} />
       <SessionInfo state={state} />
       {viewMode === 'settings' && <Settings selectedIndex={settingsIdx} />}
-      {viewMode === 'agent' && selectedAgent && <AgentDetail agent={selectedAgent} />}
+      {(viewMode === 'agent' || viewMode === 'input') && selectedAgent && <AgentDetail agent={selectedAgent} />}
+      {viewMode === 'input' && (
+        <Box marginTop={1}>
+          <Text color="cyan">{'\u276f'} </Text>
+          <Text>{inputText}</Text>
+          <Text color="cyan">_</Text>
+        </Box>
+      )}
       {viewMode === 'log' && (
         <SessionLog lines={state.logLines} scrollOffset={logScroll} maxHeight={LOG_MAX_HEIGHT} />
+      )}
+      {sendStatus && (
+        <Box marginTop={1}>
+          <Text color="green">{'\u2714'} {sendStatus}</Text>
+        </Box>
       )}
       {!state.connected && (
         <Box marginTop={1}>
