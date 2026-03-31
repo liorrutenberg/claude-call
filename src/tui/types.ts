@@ -26,6 +26,23 @@ export interface AgentEntry {
   completedAt?: Date
   elapsedMs: number
   summary?: string
+  claudeSessionId?: string
+  hookAgentId?: string
+}
+
+export interface SessionRegistration {
+  session_id: string
+  agent_id: string
+  agent_type: string
+  ts: string
+}
+
+/** A parsed line from stdout.log for display */
+export interface LogLine {
+  type: 'text' | 'tool' | 'thinking' | 'error' | 'system'
+  content: string
+  toolName?: string
+  ts?: string
 }
 
 export interface MonitorState {
@@ -34,6 +51,8 @@ export interface MonitorState {
   status: StatusFile | null
   agents: AgentEntry[]
   uptimeMs: number
+  claudeSessionId: string | null
+  logLines: LogLine[]
   agentCounts: {
     total: number
     active: number

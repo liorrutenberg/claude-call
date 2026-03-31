@@ -5,10 +5,10 @@
  * Provides sensible defaults so the plugin works out of the box after setup.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { parse as parseYaml } from 'yaml'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -236,12 +236,21 @@ function merge(base: Config, yaml: YamlConfig): Config {
 // ─── Public API ─────────────────────────────────────────────
 
 let cached: Config | null = null
+let cachedMtime: number = 0
 
 export function loadConfig(): Config {
-  if (cached) return cached
+  const configPath = join(DATA_DIR, 'config.yaml')
+
+  // Auto-reload when config file changes
+  try {
+    const mtime = existsSync(configPath) ? statSync(configPath).mtimeMs : 0
+    if (cached && mtime === cachedMtime) return cached
+    cachedMtime = mtime
+  } catch {
+    if (cached) return cached
+  }
 
   const base = defaults()
-  const configPath = join(base.dataDir, 'config.yaml')
   const yaml = loadYaml(configPath)
   const config = merge(base, yaml)
   applyEnvOverrides(config)
@@ -255,12 +264,44 @@ export function loadConfig(): Config {
   return config
 }
 
+/** Force config reload on next access */
+export function invalidateConfig(): void {
+  cached = null
+  cachedMtime = 0
+}
+
 export function getModelsDir(): string {
   return join(loadConfig().dataDir, 'models')
 }
 
 export function getLogDir(): string {
   return join(loadConfig().dataDir, 'logs')
+}
+
+/** Write specific config fields to config.yaml (merge, not overwrite). */
+export function writeConfig(patch: Partial<YamlConfig>): void {
+  const configPath = join(DATA_DIR, 'config.yaml')
+  mkdirSync(DATA_DIR, { recursive: true })
+
+  let existing: Record<string, unknown> = {}
+  if (existsSync(configPath)) {
+    try {
+      existing = (parseYaml(readFileSync(configPath, 'utf-8')) as Record<string, unknown>) ?? {}
+    } catch { /* start fresh */ }
+  }
+
+  // Deep merge one level: top-level keys with object values get spread-merged
+  for (const [key, value] of Object.entries(patch)) {
+    if (value && typeof value === 'object' && !Array.isArray(value) &&
+        existing[key] && typeof existing[key] === 'object' && !Array.isArray(existing[key])) {
+      existing[key] = { ...(existing[key] as Record<string, unknown>), ...(value as Record<string, unknown>) }
+    } else {
+      existing[key] = value
+    }
+  }
+
+  writeFileSync(configPath, stringifyYaml(existing), 'utf-8')
+  invalidateConfig()
 }
 
 // Re-export per-run helpers from runtime module

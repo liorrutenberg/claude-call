@@ -410,6 +410,7 @@ async function callStart(): Promise<void> {
       env: {
         ...process.env,
         CLAUDE_CALL_RUN_DIR: runDir,
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       },
     })
     claudeProc.unref()

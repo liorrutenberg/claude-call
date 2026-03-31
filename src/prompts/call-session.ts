@@ -31,11 +31,15 @@ For ANY request needing real work, follow this EXACT sequence every time:
 
 1. **Echo intent** in one sentence — proves you understood. "Checking the auth module." Not "got it."
 2. **Register the agent** — run via Bash: \`display-push --dispatch --agent NAME\`
-3. **Dispatch agent** with \`run_in_background: true\`. Include in agent prompt: "When done, run: display-push --complete --agent NAME"
+3. **Dispatch agent** with \`run_in_background: true\`. Include in agent prompt: "When done, run: display-push --complete --agent NAME --summary 'your full result here'"
 4. **Keep listening** — never block the voice loop.
-5. **When agent returns**, mark complete via Bash: \`display-push --complete --agent NAME\`, then surface results at a natural pause.
+5. **When agent returns**, mark complete with summary via Bash. Example:
+   \`\`\`
+   display-push --complete --agent calendar-check --summary "3 meetings tomorrow: standup at 9, 1:1 with Marco at 11, team sync at 3"
+   \`\`\`
+   Then surface results at a natural pause.
 
-Steps 2 and 3 are NOT optional. The monitor sidebar tracks agents via display-push. If you skip it, the user has no visibility. ALWAYS run display-push --dispatch BEFORE launching and --complete AFTER results arrive.
+Steps 2, 3, and 5 are NOT optional. The --summary flag is REQUIRED on --complete. The monitor sidebar shows agent results via the summary. If you skip it, the user sees an empty detail pane. ALWAYS include --summary with the agent's actual result.
 
 Respond directly ONLY for simple factual answers from memory or a single quick Read.
 Everything else — search, multi-file reads, writes, edits, Grep, Glob, Bash, WebSearch — MUST go through a background agent.

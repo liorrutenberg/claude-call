@@ -186,6 +186,10 @@ let ttsMuted = false
 let voiceLoopRunning = false
 let sessionDead = false
 
+// User-speaking gate — speak tasks wait for user to finish before playing
+let userSpeakingDone: Promise<void> = Promise.resolve()
+let resolveUserSpeaking: (() => void) | null = null
+
 // Speech queue — serializes concurrent speak calls, prevents overlapping audio
 let speakQueue: Promise<void> = Promise.resolve()
 let speakGeneration = 0  // Cancel token for queue flushing
@@ -321,6 +325,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           // Check if muted (signal file — unified source of truth)
           if (isMuted()) {
             resolve('muted')
+            return
+          }
+
+          // Wait for user to finish speaking before playing TTS
+          await userSpeakingDone
+
+          // Re-check cancellation after waiting
+          if (gen !== speakGeneration) {
+            resolve('cancelled')
             return
           }
 
@@ -511,10 +524,19 @@ async function voiceLoop(): Promise<void> {
           playSpeechStartBeep()
           partialText = ''
           stableText = ''
+          // Gate TTS — don't talk over the user
+          if (!resolveUserSpeaking) {
+            userSpeakingDone = new Promise<void>(r => { resolveUserSpeaking = r })
+          }
         },
         onSpeechEnd: () => {
           log('speech ended — captured')
           playSpeechEndBeep()
+          // Release TTS gate
+          if (resolveUserSpeaking) {
+            resolveUserSpeaking()
+            resolveUserSpeaking = null
+          }
         },
         previewIntervalMs: 600,
         previewWindowS: 5,
@@ -576,9 +598,14 @@ async function voiceLoop(): Promise<void> {
 
       log(`recording took ${t1 - t0}ms`)
 
+      // If TTS is playing, wait for it to finish before transcribing
       if (ttsMuted) {
-        try { unlinkSync(wavPath) } catch { /* ignore */ }
-        continue
+        log('waiting for TTS to finish before transcribing...')
+        await new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (!ttsMuted) { clearInterval(check); resolve() }
+          }, 100)
+        })
       }
 
       log(`transcribing (full): ${wavPath}`)
